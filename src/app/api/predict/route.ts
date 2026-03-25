@@ -4,6 +4,9 @@ import { runPrediction } from "@/lib/services/pipeline";
 import type { Horizon, RankMode } from "@/types";
 import { HORIZONS, RANK_MODES } from "@/types";
 
+// Allow up to 30 seconds on Vercel (free tier max is 60s for hobby)
+export const maxDuration = 30;
+
 export async function POST(req: NextRequest) {
   const session = await getSession();
   if (!session.isLoggedIn) {
