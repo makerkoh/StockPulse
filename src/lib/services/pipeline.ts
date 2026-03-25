@@ -177,9 +177,9 @@ export async function runPrediction(
 
   // Build sentiment from news
   const sentimentMap = new Map<string, SentimentData>();
-  for (const [ticker, news] of newsMap) {
+  newsMap.forEach((news, ticker) => {
     sentimentMap.set(ticker, buildSentiment(news));
-  }
+  });
 
   // Build initial feature vectors (without AV technicals)
   const featureVectors = new Map<string, FeatureVector>();
