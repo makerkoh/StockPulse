@@ -137,6 +137,15 @@ export interface SentimentData {
   bearishCount: number;
 }
 
+// ─── Insider Trading Data ────────────────────────────────────────────
+export interface InsiderData {
+  mspr: number;             // Monthly Share Purchase Ratio (-100 to 100)
+  totalBuys: number;        // Number of buy transactions (last 3 months)
+  totalSells: number;       // Number of sell transactions (last 3 months)
+  netBuyValue: number;      // Net dollar value of insider purchases
+  clusterBuying: boolean;   // 3+ insiders buying within 30 days
+}
+
 // ─── Feature Vector ──────────────────────────────────────────────────
 export interface FeatureVector {
   ticker: string;

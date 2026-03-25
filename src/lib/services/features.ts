@@ -5,6 +5,7 @@ import type {
   TechnicalIndicators,
   EconomicContext,
   SentimentData,
+  InsiderData,
 } from "@/types";
 
 // ─── Technical Features from Price Bars ──────────────────────────────
@@ -95,6 +96,7 @@ export function buildFeatures(
   technicalIndicators?: TechnicalIndicators | null,
   economicContext?: EconomicContext | null,
   sentiment?: SentimentData | null,
+  insider?: InsiderData | null,
 ): FeatureVector {
   const closes = bars.map((b) => b.close);
   const volumes = bars.map((b) => b.volume);
@@ -201,6 +203,19 @@ export function buildFeatures(
       : 0.5;
     // Sentiment strength: how polarized the news is
     features.sentiment_strength = Math.abs(sentiment.avgSentiment);
+  }
+
+  // Insider trading features
+  if (insider) {
+    // MSPR: -100 (all selling) to +100 (all buying)
+    features.insider_mspr = insider.mspr;
+    // Buy/sell ratio
+    const totalTxns = insider.totalBuys + insider.totalSells;
+    features.insider_buy_ratio = totalTxns > 0 ? insider.totalBuys / totalTxns : 0.5;
+    // Cluster buying is a very strong signal
+    features.insider_cluster = insider.clusterBuying ? 1 : 0;
+    // Net buy value (normalized to a signal)
+    features.insider_net_value = insider.netBuyValue > 0 ? 1 : insider.netBuyValue < 0 ? -1 : 0;
   }
 
   return {

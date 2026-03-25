@@ -6,6 +6,7 @@ import type {
   IpoEntry,
   TechnicalIndicators,
   EconomicContext,
+  InsiderData,
 } from "@/types";
 
 export interface MarketDataProvider {
@@ -43,6 +44,11 @@ export interface TechnicalProvider {
 export interface EconomicProvider {
   name: string;
   getEconomicContext(): Promise<EconomicContext | null>;
+}
+
+export interface InsiderProvider {
+  name: string;
+  getInsiderData(ticker: string): Promise<InsiderData | null>;
 }
 
 export const DEFAULT_UNIVERSE = [

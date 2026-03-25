@@ -4,12 +4,14 @@ import type {
   FundamentalData,
   NewsItem,
   IpoEntry,
+  InsiderData,
 } from "@/types";
 import type {
   MarketDataProvider,
   FundamentalProvider,
   NewsProvider,
   IpoProvider,
+  InsiderProvider,
 } from "./interfaces";
 import { seededRandom } from "@/lib/utils";
 
@@ -148,7 +150,7 @@ function demoIpos(): IpoEntry[] {
 
 // ─── Finnhub Live Implementation ─────────────────────────────────────
 export class FinnhubProvider
-  implements MarketDataProvider, FundamentalProvider, NewsProvider, IpoProvider
+  implements MarketDataProvider, FundamentalProvider, NewsProvider, IpoProvider, InsiderProvider
 {
   name = "finnhub";
   private apiKey: string;
@@ -284,6 +286,57 @@ export class FinnhubProvider
       sentiment: 0,
       riskScore: 0.5,
     }));
+  }
+
+  async getInsiderData(ticker: string): Promise<InsiderData | null> {
+    // Fetch insider sentiment (MSPR) from Finnhub
+    const from = new Date(Date.now() - 90 * 86_400_000).toISOString().split("T")[0];
+    const to = new Date().toISOString().split("T")[0];
+    const [sentimentData, txnData] = await Promise.all([
+      this.fetch<any>("/stock/insider-sentiment", { symbol: ticker, from, to }),
+      this.fetch<any>("/stock/insider-transactions", { symbol: ticker }),
+    ]);
+
+    // Extract MSPR (Monthly Share Purchase Ratio)
+    let mspr = 0;
+    if (sentimentData?.data && Array.isArray(sentimentData.data) && sentimentData.data.length > 0) {
+      // Average MSPR over available months
+      const msprValues = sentimentData.data.map((d: any) => d.mspr || 0);
+      mspr = msprValues.reduce((a: number, b: number) => a + b, 0) / msprValues.length;
+    }
+
+    // Count buys vs sells from transactions
+    let totalBuys = 0;
+    let totalSells = 0;
+    let netBuyValue = 0;
+    const recentBuyers = new Set<string>();
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 86_400_000).toISOString().split("T")[0];
+
+    if (txnData?.data && Array.isArray(txnData.data)) {
+      for (const txn of txnData.data) {
+        const change = txn.change || 0;
+        const value = Math.abs(change) * (txn.transactionPrice || 0);
+        if (change > 0) {
+          totalBuys++;
+          netBuyValue += value;
+          // Track recent buyers for cluster detection
+          if (txn.filingDate >= thirtyDaysAgo) {
+            recentBuyers.add(txn.name || txn.id);
+          }
+        } else if (change < 0) {
+          totalSells++;
+          netBuyValue -= value;
+        }
+      }
+    }
+
+    return {
+      mspr,
+      totalBuys,
+      totalSells,
+      netBuyValue,
+      clusterBuying: recentBuyers.size >= 3,
+    };
   }
 }
 

@@ -14,6 +14,18 @@ export function scoreStock(
   // Sentiment bonus/penalty applied across all modes
   const sentimentBonus = (f.avg_sentiment ?? 0) * 10;
 
+  // Insider trading bonus — cluster buying is a very strong signal
+  let insiderBonus = 0;
+  if (f.insider_mspr != null) {
+    insiderBonus += (f.insider_mspr / 100) * 8; // MSPR contribution
+  }
+  if (f.insider_cluster === 1) {
+    insiderBonus += 12; // Cluster buying is a major signal
+  }
+  if (f.insider_buy_ratio != null && f.insider_buy_ratio > 0.7) {
+    insiderBonus += 5; // Strong buy ratio
+  }
+
   switch (mode) {
     case "expected_return": {
       const ret = forecast.expectedReturn;
@@ -22,7 +34,8 @@ export function scoreStock(
       breakdown.confidence_bonus = conf * 20;
       breakdown.risk_penalty = -Math.max(0, -forecast.riskReward) * 10;
       breakdown.sentiment = sentimentBonus;
-      score = ret * 60 + conf * 25 + Math.min(forecast.riskReward, 3) * 5 + sentimentBonus;
+      breakdown.insider = insiderBonus;
+      score = ret * 60 + conf * 25 + Math.min(forecast.riskReward, 3) * 5 + sentimentBonus + insiderBonus;
       break;
     }
     case "sharpe": {
@@ -33,7 +46,8 @@ export function scoreStock(
       breakdown.volatility_penalty = -(vol / forecast.currentPrice) * 50;
       breakdown.sharpe_estimate = sharpe;
       breakdown.sentiment = sentimentBonus;
-      score = sharpe * 30 + forecast.confidence * 20 + sentimentBonus;
+      breakdown.insider = insiderBonus;
+      score = sharpe * 30 + forecast.confidence * 20 + sentimentBonus + insiderBonus;
       break;
     }
     case "risk_adjusted": {
@@ -45,7 +59,8 @@ export function scoreStock(
       breakdown.risk_reward = rr;
       breakdown.confidence = forecast.confidence * 100;
       breakdown.sentiment = sentimentBonus;
-      score = rr * 20 + forecast.confidence * 30 + upside * 50 + sentimentBonus;
+      breakdown.insider = insiderBonus;
+      score = rr * 20 + forecast.confidence * 30 + upside * 50 + sentimentBonus + insiderBonus;
       break;
     }
     case "momentum": {
@@ -61,12 +76,12 @@ export function scoreStock(
       breakdown.rsi = rsiVal;
       breakdown.volume_ratio = volRatio;
       breakdown.sentiment = sentimentBonus;
+      breakdown.insider = insiderBonus;
       if (adxVal > 0) breakdown.adx_trend = adxVal;
       score = ret5d * 3 + ret20d * 2 + ret60d * 1.5 +
         (rsiVal > 50 && rsiVal < 80 ? 10 : -5) +
         Math.min(volRatio, 3) * 5 +
-        sentimentBonus +
-        // ADX > 25 = strong trend, amplify momentum score
+        sentimentBonus + insiderBonus +
         (adxVal > 25 ? 8 : 0);
       break;
     }
@@ -89,12 +104,11 @@ export function scoreStock(
       if (dcfUpside !== 0) breakdown.dcf_upside = dcfUpside;
       if (grossMargin !== 0) breakdown.gross_margin = grossMargin;
 
+      breakdown.insider = insiderBonus;
       score = breakdown.pe_score * 2 + breakdown.pb_score * 3 +
         breakdown.ps_score * 2 + dy * 5 + roe * 0.5 +
-        sentimentBonus +
-        // DCF upside: undervalued stocks get a boost
+        sentimentBonus + insiderBonus +
         clamp(dcfUpside * 0.3, -10, 15) +
-        // Quality margins
         clamp(grossMargin * 0.1, 0, 8) +
         clamp(netMargin * 0.15, 0, 8);
       break;

@@ -6,6 +6,7 @@ import type {
   IpoEntry,
   TechnicalIndicators,
   EconomicContext,
+  InsiderData,
 } from "@/types";
 import type {
   MarketDataProvider,
@@ -14,6 +15,7 @@ import type {
   IpoProvider,
   TechnicalProvider,
   EconomicProvider,
+  InsiderProvider,
 } from "./interfaces";
 import type { FinnhubProvider, DemoProvider } from "./finnhub";
 import type { FmpProvider } from "./fmp";
@@ -26,7 +28,8 @@ export class AggregatedProvider
     NewsProvider,
     IpoProvider,
     TechnicalProvider,
-    EconomicProvider
+    EconomicProvider,
+    InsiderProvider
 {
   name: string;
   private finnhub?: FinnhubProvider;
@@ -137,6 +140,14 @@ export class AggregatedProvider
   async getEconomicContext(): Promise<EconomicContext | null> {
     if (this.alphaVantage) {
       return this.alphaVantage.getEconomicContext();
+    }
+    return null;
+  }
+
+  // ─── Insider Data: Finnhub only ───────────────────────────────────
+  async getInsiderData(ticker: string): Promise<InsiderData | null> {
+    if (this.finnhub) {
+      return this.finnhub.getInsiderData(ticker);
     }
     return null;
   }

@@ -12,6 +12,7 @@ import type {
   NewsItem,
   PriceBar,
   FundamentalData,
+  InsiderData,
 } from "@/types";
 import { getProvider, isDemo } from "@/lib/providers/registry";
 import { DEFAULT_UNIVERSE } from "@/lib/providers/interfaces";
@@ -124,13 +125,22 @@ function generateForecast(
   const sentimentDrift = (f.avg_sentiment ?? 0) * 0.01 * days;
   const adxMultiplier = f.adx != null && f.adx > 25 ? 1.2 : 1.0;
 
+  // Insider trading signal — cluster buying is very strong
+  let insiderDrift = 0;
+  if (f.insider_mspr != null) {
+    insiderDrift = (f.insider_mspr / 100) * 0.015 * days; // MSPR scaled to drift
+  }
+  if (f.insider_cluster === 1) {
+    insiderDrift += 0.01 * days; // Strong bonus for cluster buying
+  }
+
   let macroAdjust = 0;
   if (f.fed_rate != null && f.cpi_yoy != null) {
     if (f.fed_rate > 4 && f.cpi_yoy > 3) macroAdjust = -0.001 * days;
     else if (f.fed_rate < 2) macroAdjust = 0.001 * days;
   }
 
-  const annualizedDrift = (momentumDrift + rsiSignal + trendBonus + valueTilt + dcfBonus + sentimentDrift + macroAdjust) * adxMultiplier;
+  const annualizedDrift = (momentumDrift + rsiSignal + trendBonus + valueTilt + dcfBonus + sentimentDrift + insiderDrift + macroAdjust) * adxMultiplier;
   const periodReturn = annualizedDrift * (days / 252);
   const baseVol = f.volatility_20d ? f.volatility_20d / currentPrice : 0.02;
   const periodVol = baseVol * Math.sqrt(days);
@@ -218,8 +228,8 @@ export async function runPrediction(
   const to = new Date();
   const from = new Date(Date.now() - 365 * 86_400_000);
 
-  // Fetch prices, news, and fundamentals for top 5 in parallel
-  const [enrichedPrices, enrichedNews] = await Promise.all([
+  // Fetch prices, news, and insider data for top 5 in parallel
+  const [enrichedPrices, enrichedNews, enrichedInsider] = await Promise.all([
     Promise.all(
       topTickers.map(async (t) => {
         const bars = await provider.getHistoricalPrices(t, from, to);
@@ -232,18 +242,25 @@ export async function runPrediction(
         return [t, news] as const;
       })
     ).then((entries) => new Map(entries)),
+    Promise.all(
+      topTickers.map(async (t) => {
+        const insider = await provider.getInsiderData(t);
+        return [t, insider] as const;
+      })
+    ).then((entries) => new Map(entries)),
   ]);
 
-  // Rebuild features for top 5 with full data
+  // Rebuild features for top 5 with full data including insider signals
   for (const ticker of topTickers) {
     const bars = enrichedPrices.get(ticker) || [];
     const fund = fundamentalsMap.get(ticker) || null;
     const news = enrichedNews.get(ticker) || [];
     const sentiment = buildSentiment(news);
+    const insider = enrichedInsider.get(ticker) || null;
     if (bars.length > 0) {
       featureVectors.set(
         ticker,
-        buildFeatures(ticker, bars, fund, null, null, sentiment)
+        buildFeatures(ticker, bars, fund, null, null, sentiment, insider)
       );
     }
   }
