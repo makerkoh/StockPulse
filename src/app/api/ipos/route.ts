@@ -1,10 +1,10 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { getProvider } from "@/lib/providers/registry";
 
 export const maxDuration = 15;
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   const session = await getSession();
   if (!session.isLoggedIn) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -14,12 +14,17 @@ export async function GET() {
     const provider = getProvider();
     const ipos = await provider.getUpcomingIpos();
 
-    // Filter to next 2 weeks
-    const twoWeeksOut = new Date(Date.now() + 14 * 86_400_000).toISOString().split("T")[0];
+    // Default to 30-day window (captures more IPOs than 2 weeks)
+    const daysParam = req.nextUrl.searchParams.get("days");
+    const days = daysParam ? parseInt(daysParam) : 30;
+    const cutoff = new Date(Date.now() + days * 86_400_000).toISOString().split("T")[0];
     const today = new Date().toISOString().split("T")[0];
-    const filtered = ipos.filter((ipo) => ipo.expectedDate >= today && ipo.expectedDate <= twoWeeksOut);
 
-    // Sort by date
+    const filtered = ipos.filter((ipo) => {
+      if (!ipo.expectedDate) return true; // Include if no date (show all)
+      return ipo.expectedDate >= today && ipo.expectedDate <= cutoff;
+    });
+
     filtered.sort((a, b) => a.expectedDate.localeCompare(b.expectedDate));
 
     return NextResponse.json({ data: filtered });

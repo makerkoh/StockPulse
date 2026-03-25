@@ -3,13 +3,14 @@ import type {
   PriceBar,
   FundamentalData,
   ExtendedFundamentals,
+  IpoEntry,
 } from "@/types";
-import type { MarketDataProvider, FundamentalProvider } from "./interfaces";
+import type { MarketDataProvider, FundamentalProvider, IpoProvider } from "./interfaces";
 import { CachedFetcher, FMP_LIMITER, TTL } from "./rate-limiter";
 
 const BASE_URL = "https://financialmodelingprep.com/api/v3";
 
-export class FmpProvider implements MarketDataProvider, FundamentalProvider {
+export class FmpProvider implements MarketDataProvider, FundamentalProvider, IpoProvider {
   name = "fmp";
   private apiKey: string;
   private fetcher: CachedFetcher;
@@ -137,5 +138,29 @@ export class FmpProvider implements MarketDataProvider, FundamentalProvider {
       revenuePerShare: m.revenuePerShare ?? null,
       payoutRatio: r.payoutRatio ?? null,
     };
+  }
+
+  async getUpcomingIpos(): Promise<IpoEntry[]> {
+    const from = new Date().toISOString().split("T")[0];
+    const to = new Date(Date.now() + 90 * 86_400_000).toISOString().split("T")[0];
+    const data = await this.fetcher.fetch<any[]>(
+      this.url("/ipo_calendar", { from, to }),
+      TTL.NEWS
+    );
+    if (!data || !Array.isArray(data)) return [];
+    return data.slice(0, 20).map((ipo: any, i: number) => ({
+      id: `fmp-ipo-${i}`,
+      ticker: ipo.symbol || "TBD",
+      companyName: ipo.company || ipo.name || "Unknown",
+      exchange: ipo.exchange || "NASDAQ",
+      expectedDate: ipo.date || "",
+      priceRangeLow: ipo.priceRange ? parseFloat(ipo.priceRange.split("-")[0]) || 0 : 0,
+      priceRangeHigh: ipo.priceRange ? parseFloat(ipo.priceRange.split("-")[1]) || 0 : 0,
+      shares: ipo.shares || 0,
+      status: "upcoming" as const,
+      sector: ipo.sector || "Unknown",
+      sentiment: 0,
+      riskScore: 0.5,
+    }));
   }
 }

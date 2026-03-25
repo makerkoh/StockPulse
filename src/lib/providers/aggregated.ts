@@ -119,12 +119,29 @@ export class AggregatedProvider
     return this.demo.getMarketNews(limit);
   }
 
-  // ─── IPOs: Finnhub → Demo ────────────────────────────────────────
+  // ─── IPOs: Merge Finnhub + FMP for best coverage → Demo ──────────
   async getUpcomingIpos(): Promise<IpoEntry[]> {
-    if (this.finnhub) {
-      const result = await this.finnhub.getUpcomingIpos();
-      if (result.length > 0) return result;
+    const results: IpoEntry[] = [];
+    const seenTickers = new Set<string>();
+
+    // Fetch from both sources in parallel
+    const [finnhubIpos, fmpIpos] = await Promise.all([
+      this.finnhub ? this.finnhub.getUpcomingIpos() : Promise.resolve([]),
+      this.fmp ? this.fmp.getUpcomingIpos() : Promise.resolve([]),
+    ]);
+
+    // Merge, deduplicating by ticker
+    for (const ipo of [...finnhubIpos, ...fmpIpos]) {
+      if (!seenTickers.has(ipo.ticker)) {
+        seenTickers.add(ipo.ticker);
+        results.push(ipo);
+      }
     }
+
+    // Sort by date
+    results.sort((a, b) => a.expectedDate.localeCompare(b.expectedDate));
+
+    if (results.length > 0) return results;
     return this.demo.getUpcomingIpos();
   }
 
