@@ -30,11 +30,13 @@ interface CardProps {
   children: React.ReactNode;
   className?: string;
   hover?: boolean;
+  style?: React.CSSProperties;
 }
 
-export function Card({ children, className, hover }: CardProps) {
+export function Card({ children, className, hover, style }: CardProps) {
   return (
     <div
+      style={style}
       className={cn(
         "bg-surface-1 border border-border rounded-xl",
         hover && "card-glow cursor-pointer",
