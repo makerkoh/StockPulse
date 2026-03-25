@@ -9,6 +9,7 @@ import { DEFAULT_UNIVERSE } from "@/lib/providers/interfaces";
 export default function SettingsPage() {
   const [settings, setSettings] = useState<AppSettings>({
     finnhubKey: "",
+    fmpKey: "",
     alphaVantageKey: "",
     newsApiKey: "",
     defaultHorizon: "1W",
@@ -82,8 +83,9 @@ export default function SettingsPage() {
           Without API keys the platform runs in demo mode with simulated data.
         </p>
         {[
-          { key: "finnhubKey" as const, label: "Finnhub", placeholder: "pk_..." },
-          { key: "alphaVantageKey" as const, label: "Alpha Vantage", placeholder: "Your key" },
+          { key: "finnhubKey" as const, label: "Finnhub (quotes, news, IPOs)", placeholder: "pk_..." },
+          { key: "fmpKey" as const, label: "Financial Modeling Prep (fundamentals, DCF)", placeholder: "Your key" },
+          { key: "alphaVantageKey" as const, label: "Alpha Vantage (technicals, economics)", placeholder: "Your key" },
           { key: "newsApiKey" as const, label: "NewsAPI", placeholder: "Your key" },
         ].map((field) => (
           <div key={field.key}>

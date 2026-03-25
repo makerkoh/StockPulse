@@ -4,6 +4,8 @@ import type {
   FundamentalData,
   NewsItem,
   IpoEntry,
+  TechnicalIndicators,
+  EconomicContext,
 } from "@/types";
 
 export interface MarketDataProvider {
@@ -31,6 +33,16 @@ export interface NewsProvider {
 export interface IpoProvider {
   name: string;
   getUpcomingIpos(): Promise<IpoEntry[]>;
+}
+
+export interface TechnicalProvider {
+  name: string;
+  getTechnicalIndicators(ticker: string): Promise<TechnicalIndicators | null>;
+}
+
+export interface EconomicProvider {
+  name: string;
+  getEconomicContext(): Promise<EconomicContext | null>;
 }
 
 export const DEFAULT_UNIVERSE = [

@@ -1,24 +1,25 @@
 import { FinnhubProvider, DemoProvider } from "./finnhub";
-import type {
-  MarketDataProvider,
-  FundamentalProvider,
-  NewsProvider,
-  IpoProvider,
-} from "./interfaces";
+import { FmpProvider } from "./fmp";
+import { AlphaVantageProvider } from "./alpha-vantage";
+import { AggregatedProvider } from "./aggregated";
 
-type UnifiedProvider = MarketDataProvider & FundamentalProvider & NewsProvider & IpoProvider;
+let _provider: AggregatedProvider | null = null;
 
-let _provider: UnifiedProvider | null = null;
-
-export function getProvider(): UnifiedProvider {
+export function getProvider(): AggregatedProvider {
   if (_provider) return _provider;
 
+  const demo = new DemoProvider();
+
   const finnhubKey = process.env.FINNHUB_API_KEY;
-  if (finnhubKey && finnhubKey.length > 0) {
-    _provider = new FinnhubProvider(finnhubKey);
-  } else {
-    _provider = new DemoProvider();
-  }
+  const fmpKey = process.env.FMP_API_KEY;
+  const avKey = process.env.ALPHA_VANTAGE_API_KEY;
+
+  _provider = new AggregatedProvider({
+    finnhub: finnhubKey && finnhubKey.length > 0 ? new FinnhubProvider(finnhubKey) : undefined,
+    fmp: fmpKey && fmpKey.length > 0 ? new FmpProvider(fmpKey) : undefined,
+    alphaVantage: avKey && avKey.length > 0 ? new AlphaVantageProvider(avKey) : undefined,
+    demo,
+  });
 
   return _provider;
 }

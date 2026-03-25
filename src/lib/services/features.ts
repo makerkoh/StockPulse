@@ -1,4 +1,11 @@
-import type { PriceBar, FundamentalData, FeatureVector } from "@/types";
+import type {
+  PriceBar,
+  FundamentalData,
+  FeatureVector,
+  TechnicalIndicators,
+  EconomicContext,
+  SentimentData,
+} from "@/types";
 
 // ─── Technical Features from Price Bars ──────────────────────────────
 function sma(prices: number[], window: number): number {
@@ -42,7 +49,6 @@ function macd(prices: number[]): { macd: number; signal: number; histogram: numb
   const fast = ema(prices, 12);
   const slow = ema(prices, 26);
   const macdLine = fast - slow;
-  // Simplified signal as we don't track full MACD history
   return { macd: macdLine, signal: macdLine * 0.8, histogram: macdLine * 0.2 };
 }
 
@@ -85,7 +91,10 @@ function atr(bars: PriceBar[], window = 14): number {
 export function buildFeatures(
   ticker: string,
   bars: PriceBar[],
-  fundamentals: FundamentalData | null
+  fundamentals: FundamentalData | null,
+  technicalIndicators?: TechnicalIndicators | null,
+  economicContext?: EconomicContext | null,
+  sentiment?: SentimentData | null,
 ): FeatureVector {
   const closes = bars.map((b) => b.close);
   const volumes = bars.map((b) => b.volume);
@@ -140,6 +149,58 @@ export function buildFeatures(
     features.earnings_growth = fundamentals.earningsGrowth ?? 0;
     features.dividend_yield = fundamentals.dividendYield ?? 0;
     features.beta = fundamentals.beta ?? 0;
+
+    // Extended fundamentals from FMP (type guard)
+    if ("dcf" in fundamentals && fundamentals.dcf !== undefined) {
+      const ext = fundamentals as import("@/types").ExtendedFundamentals;
+      if (ext.dcf != null && currentPrice > 0) {
+        features.dcf_upside = (ext.dcf - currentPrice) / currentPrice;
+      }
+      if (ext.currentRatio != null) features.current_ratio = ext.currentRatio;
+      if (ext.quickRatio != null) features.quick_ratio = ext.quickRatio;
+      if (ext.grossMargin != null) features.gross_margin = ext.grossMargin;
+      if (ext.operatingMargin != null) features.operating_margin = ext.operatingMargin;
+      if (ext.netMargin != null) features.net_margin = ext.netMargin;
+      if (ext.freeCashFlowPerShare != null) features.fcf_per_share = ext.freeCashFlowPerShare;
+      if (ext.payoutRatio != null) features.payout_ratio = ext.payoutRatio;
+    }
+  }
+
+  // Alpha Vantage server-computed technical indicators (override local approximations)
+  if (technicalIndicators) {
+    if (technicalIndicators.rsi14 != null) features.av_rsi_14 = technicalIndicators.rsi14;
+    if (technicalIndicators.macd != null) features.av_macd = technicalIndicators.macd;
+    if (technicalIndicators.macdSignal != null) features.av_macd_signal = technicalIndicators.macdSignal;
+    if (technicalIndicators.macdHist != null) features.av_macd_hist = technicalIndicators.macdHist;
+    if (technicalIndicators.bollingerUpper != null) features.av_bb_upper = technicalIndicators.bollingerUpper;
+    if (technicalIndicators.bollingerLower != null) features.av_bb_lower = technicalIndicators.bollingerLower;
+    if (technicalIndicators.stochK != null) features.stoch_k = technicalIndicators.stochK;
+    if (technicalIndicators.stochD != null) features.stoch_d = technicalIndicators.stochD;
+    if (technicalIndicators.adx != null) features.adx = technicalIndicators.adx;
+    if (technicalIndicators.cci != null) features.cci = technicalIndicators.cci;
+  }
+
+  // Economic context (same for all stocks in a run — market regime signal)
+  if (economicContext) {
+    if (economicContext.gdpGrowth != null) features.gdp_growth = economicContext.gdpGrowth;
+    if (economicContext.cpiYoy != null) features.cpi_yoy = economicContext.cpiYoy;
+    if (economicContext.unemploymentRate != null) features.unemployment = economicContext.unemploymentRate;
+    if (economicContext.fedFundsRate != null) features.fed_rate = economicContext.fedFundsRate;
+    if (economicContext.treasuryYield10y != null) features.treasury_10y = economicContext.treasuryYield10y;
+  }
+
+  // Sentiment features (from news)
+  if (sentiment) {
+    features.avg_sentiment = sentiment.avgSentiment;
+    features.sentiment_count = sentiment.sentimentCount;
+    features.bullish_ratio = sentiment.sentimentCount > 0
+      ? sentiment.bullishCount / sentiment.sentimentCount
+      : 0.5;
+    features.bearish_ratio = sentiment.sentimentCount > 0
+      ? sentiment.bearishCount / sentiment.sentimentCount
+      : 0.5;
+    // Sentiment strength: how polarized the news is
+    features.sentiment_strength = Math.abs(sentiment.avgSentiment);
   }
 
   return {

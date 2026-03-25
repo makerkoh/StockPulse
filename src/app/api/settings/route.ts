@@ -6,6 +6,7 @@ import { DEFAULT_UNIVERSE } from "@/lib/providers/interfaces";
 // In-memory settings store (in production, use Prisma Setting model)
 let currentSettings: AppSettings = {
   finnhubKey: process.env.FINNHUB_API_KEY || "",
+  fmpKey: process.env.FMP_API_KEY || "",
   alphaVantageKey: process.env.ALPHA_VANTAGE_API_KEY || "",
   newsApiKey: process.env.NEWS_API_KEY || "",
   defaultHorizon: "1W",
@@ -24,6 +25,7 @@ export async function GET() {
   const masked: AppSettings = {
     ...currentSettings,
     finnhubKey: currentSettings.finnhubKey ? "••••" + currentSettings.finnhubKey.slice(-4) : "",
+    fmpKey: currentSettings.fmpKey ? "••••" + currentSettings.fmpKey.slice(-4) : "",
     alphaVantageKey: currentSettings.alphaVantageKey ? "••••" + currentSettings.alphaVantageKey.slice(-4) : "",
     newsApiKey: currentSettings.newsApiKey ? "••••" + currentSettings.newsApiKey.slice(-4) : "",
   };
@@ -43,6 +45,9 @@ export async function POST(req: NextRequest) {
     // Only update non-masked fields
     if (body.finnhubKey && !body.finnhubKey.startsWith("••••")) {
       currentSettings.finnhubKey = body.finnhubKey;
+    }
+    if (body.fmpKey && !body.fmpKey.startsWith("••••")) {
+      currentSettings.fmpKey = body.fmpKey;
     }
     if (body.alphaVantageKey && !body.alphaVantageKey.startsWith("••••")) {
       currentSettings.alphaVantageKey = body.alphaVantageKey;

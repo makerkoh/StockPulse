@@ -89,6 +89,54 @@ export interface IpoEntry {
   riskScore: number;
 }
 
+// ─── Extended Fundamentals (FMP) ────────────────────────────────────
+export interface ExtendedFundamentals extends FundamentalData {
+  dcf: number | null;
+  currentRatio: number | null;
+  quickRatio: number | null;
+  grossMargin: number | null;
+  operatingMargin: number | null;
+  netMargin: number | null;
+  freeCashFlowPerShare: number | null;
+  revenuePerShare: number | null;
+  payoutRatio: number | null;
+}
+
+// ─── Technical Indicators (Alpha Vantage) ───────────────────────────
+export interface TechnicalIndicators {
+  sma50: number | null;
+  sma200: number | null;
+  ema12: number | null;
+  ema26: number | null;
+  rsi14: number | null;
+  macd: number | null;
+  macdSignal: number | null;
+  macdHist: number | null;
+  bollingerUpper: number | null;
+  bollingerLower: number | null;
+  stochK: number | null;
+  stochD: number | null;
+  adx: number | null;
+  cci: number | null;
+}
+
+// ─── Economic Context (Alpha Vantage) ───────────────────────────────
+export interface EconomicContext {
+  gdpGrowth: number | null;
+  cpiYoy: number | null;
+  unemploymentRate: number | null;
+  fedFundsRate: number | null;
+  treasuryYield10y: number | null;
+}
+
+// ─── Sentiment Data ─────────────────────────────────────────────────
+export interface SentimentData {
+  avgSentiment: number;       // -1 to 1
+  sentimentCount: number;     // number of articles analyzed
+  bullishCount: number;
+  bearishCount: number;
+}
+
 // ─── Feature Vector ──────────────────────────────────────────────────
 export interface FeatureVector {
   ticker: string;
@@ -154,6 +202,7 @@ export interface StockDetail {
 // ─── Settings ────────────────────────────────────────────────────────
 export interface AppSettings {
   finnhubKey: string;
+  fmpKey: string;
   alphaVantageKey: string;
   newsApiKey: string;
   defaultHorizon: Horizon;

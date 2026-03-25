@@ -9,6 +9,10 @@ export function scoreStock(
 ): ScoredStock {
   const breakdown: Record<string, number> = {};
   let score = 0;
+  const f = features.features;
+
+  // Sentiment bonus/penalty applied across all modes
+  const sentimentBonus = (f.avg_sentiment ?? 0) * 10;
 
   switch (mode) {
     case "expected_return": {
@@ -17,17 +21,19 @@ export function scoreStock(
       breakdown.expected_return = ret * 100;
       breakdown.confidence_bonus = conf * 20;
       breakdown.risk_penalty = -Math.max(0, -forecast.riskReward) * 10;
-      score = ret * 60 + conf * 25 + Math.min(forecast.riskReward, 3) * 5;
+      breakdown.sentiment = sentimentBonus;
+      score = ret * 60 + conf * 25 + Math.min(forecast.riskReward, 3) * 5 + sentimentBonus;
       break;
     }
     case "sharpe": {
       const ret = forecast.expectedReturn;
-      const vol = features.features.volatility_20d || 0.01;
+      const vol = f.volatility_20d || 0.01;
       const sharpe = ret / Math.max(vol / forecast.currentPrice, 0.001);
       breakdown.return_component = ret * 100;
       breakdown.volatility_penalty = -(vol / forecast.currentPrice) * 50;
       breakdown.sharpe_estimate = sharpe;
-      score = sharpe * 30 + forecast.confidence * 20;
+      breakdown.sentiment = sentimentBonus;
+      score = sharpe * 30 + forecast.confidence * 20 + sentimentBonus;
       break;
     }
     case "risk_adjusted": {
@@ -38,40 +44,59 @@ export function scoreStock(
       breakdown.downside_pct = -downside * 100;
       breakdown.risk_reward = rr;
       breakdown.confidence = forecast.confidence * 100;
-      score = rr * 20 + forecast.confidence * 30 + upside * 50;
+      breakdown.sentiment = sentimentBonus;
+      score = rr * 20 + forecast.confidence * 30 + upside * 50 + sentimentBonus;
       break;
     }
     case "momentum": {
-      const f = features.features;
       const ret5d = (f.return_5d || 0) * 100;
       const ret20d = (f.return_20d || 0) * 100;
       const ret60d = (f.return_60d || 0) * 100;
-      const rsiVal = f.rsi_14 || 50;
+      const rsiVal = f.av_rsi_14 ?? f.rsi_14 ?? 50;
       const volRatio = f.volume_ratio || 1;
+      const adxVal = f.adx ?? 0;
       breakdown.return_5d = ret5d;
       breakdown.return_20d = ret20d;
       breakdown.return_60d = ret60d;
       breakdown.rsi = rsiVal;
       breakdown.volume_ratio = volRatio;
+      breakdown.sentiment = sentimentBonus;
+      if (adxVal > 0) breakdown.adx_trend = adxVal;
       score = ret5d * 3 + ret20d * 2 + ret60d * 1.5 +
         (rsiVal > 50 && rsiVal < 80 ? 10 : -5) +
-        Math.min(volRatio, 3) * 5;
+        Math.min(volRatio, 3) * 5 +
+        sentimentBonus +
+        // ADX > 25 = strong trend, amplify momentum score
+        (adxVal > 25 ? 8 : 0);
       break;
     }
     case "value": {
-      const f = features.features;
       const pe = f.pe || 25;
       const pb = f.pb || 3;
       const ps = f.ps || 5;
       const dy = (f.dividend_yield || 0) * 100;
       const roe = (f.roe || 0) * 100;
+      const dcfUpside = (f.dcf_upside ?? 0) * 100;
+      const grossMargin = (f.gross_margin ?? 0) * 100;
+      const netMargin = (f.net_margin ?? 0) * 100;
+
       breakdown.pe_score = clamp(30 - pe, -10, 20);
       breakdown.pb_score = clamp(5 - pb, -5, 10);
       breakdown.ps_score = clamp(5 - ps, -5, 10);
       breakdown.dividend_yield = dy;
       breakdown.roe = roe;
+      breakdown.sentiment = sentimentBonus;
+      if (dcfUpside !== 0) breakdown.dcf_upside = dcfUpside;
+      if (grossMargin !== 0) breakdown.gross_margin = grossMargin;
+
       score = breakdown.pe_score * 2 + breakdown.pb_score * 3 +
-        breakdown.ps_score * 2 + dy * 5 + roe * 0.5;
+        breakdown.ps_score * 2 + dy * 5 + roe * 0.5 +
+        sentimentBonus +
+        // DCF upside: undervalued stocks get a boost
+        clamp(dcfUpside * 0.3, -10, 15) +
+        // Quality margins
+        clamp(grossMargin * 0.1, 0, 8) +
+        clamp(netMargin * 0.15, 0, 8);
       break;
     }
   }

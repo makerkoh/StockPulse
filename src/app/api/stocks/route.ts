@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { getProvider } from "@/lib/providers/registry";
 import { buildFeatures } from "@/lib/services/features";
-import type { StockDetail } from "@/types";
+import type { StockDetail, SentimentData } from "@/types";
 
 export async function GET(req: NextRequest) {
   const session = await getSession();
@@ -31,8 +31,21 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: `Stock ${ticker} not found` }, { status: 404 });
     }
 
+    // Build sentiment from news
+    let sentimentCount = 0, bullishCount = 0, bearishCount = 0, sentSum = 0;
+    for (const n of news) {
+      sentSum += n.sentiment;
+      if (n.sentiment > 0.1) bullishCount++;
+      else if (n.sentiment < -0.1) bearishCount++;
+      sentimentCount++;
+    }
+    const sentiment: SentimentData = {
+      avgSentiment: sentimentCount > 0 ? sentSum / sentimentCount : 0,
+      sentimentCount, bullishCount, bearishCount,
+    };
+
     // Build a quick forecast for the detail page
-    const fv = buildFeatures(ticker, prices, fundamentals);
+    const fv = buildFeatures(ticker, prices, fundamentals, null, null, sentiment);
     const { seededRandom } = await import("@/lib/utils");
     const rng = seededRandom(ticker + "detail");
     const vol = fv.features.volatility_20d ? fv.features.volatility_20d / quote.price : 0.02;
