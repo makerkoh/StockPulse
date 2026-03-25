@@ -1,0 +1,34 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: stockpulse
+      POSTGRES_PASSWORD: stockpulse
+      POSTGRES_DB: stockpulse
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stockpulse"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: postgresql://stockpulse:stockpulse@db:5432/stockpulse?schema=public
+      SESSION_SECRET: ${SESSION_SECRET:-change-me-in-production-use-openssl-rand-hex-32}
+      APP_PASSWORD_HASH: ${APP_PASSWORD_HASH:-}
+      FINNHUB_API_KEY: ${FINNHUB_API_KEY:-}
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:

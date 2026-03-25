@@ -1,0 +1,78 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&display=swap');
+
+:root {
+  --font-body: 'DM Sans', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  --font-display: 'Instrument Serif', Georgia, serif;
+
+  --surface-0: #0a0b0f;
+  --surface-1: #12131a;
+  --surface-2: #1a1c25;
+  --surface-3: #232530;
+
+  --border: rgba(255, 255, 255, 0.08);
+  --border-subtle: rgba(255, 255, 255, 0.04);
+
+  --text-primary: #f0f0f3;
+  --text-secondary: #8b8d9a;
+  --text-tertiary: #5a5c6a;
+
+  --accent: #6c8aff;
+  --accent-hover: #8aa2ff;
+  --accent-muted: rgba(108, 138, 255, 0.12);
+
+  --positive: #34d399;
+  --negative: #f87171;
+  --warning: #fbbf24;
+}
+
+* { box-sizing: border-box; }
+
+html { color-scheme: dark; }
+
+body {
+  font-family: var(--font-body);
+  background: var(--surface-0);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.14); }
+
+*:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+::selection { background: rgba(108,138,255,0.3); color: white; }
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.skeleton {
+  background: linear-gradient(90deg, var(--surface-2) 25%, var(--surface-3) 50%, var(--surface-2) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.8s ease-in-out infinite;
+  border-radius: 4px;
+}
+
+.table-row-hover { transition: background-color 0.15s ease; }
+.table-row-hover:hover { background-color: rgba(255,255,255,0.03); }
+
+.card-glow { transition: box-shadow 0.25s ease, border-color 0.25s ease; }
+.card-glow:hover {
+  box-shadow: 0 0 0 1px rgba(108,138,255,0.15), 0 8px 32px rgba(0,0,0,0.3);
+  border-color: rgba(108,138,255,0.2);
+}
+
+.stagger-item { opacity: 0; animation: fadeIn 0.4s ease-out forwards; }
+@keyframes fadeIn { to { opacity: 1; } }
+
+.recharts-cartesian-grid-horizontal line,
+.recharts-cartesian-grid-vertical line { stroke: var(--border-subtle) !important; }
+.recharts-text { fill: var(--text-tertiary) !important; font-size: 11px !important; }

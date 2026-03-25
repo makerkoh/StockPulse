@@ -1,0 +1,228 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String    @id @default(cuid())
+  passwordHash String
+  role         String    @default("viewer")
+  createdAt    DateTime  @default(now())
+  sessions     Session[]
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+model Stock {
+  id          String       @id @default(cuid())
+  ticker      String       @unique
+  name        String
+  sector      String?
+  industry    String?
+  marketCap   Float?
+  exchange    String?
+  isActive    Boolean      @default(true)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  prices      Price[]
+  fundamentals Fundamental[]
+  forecasts   Forecast[]
+  features    Feature[]
+  news        News[]
+
+  @@index([sector])
+  @@index([isActive])
+}
+
+model Price {
+  id       String   @id @default(cuid())
+  stockId  String
+  stock    Stock    @relation(fields: [stockId], references: [id], onDelete: Cascade)
+  date     DateTime
+  open     Float
+  high     Float
+  low      Float
+  close    Float
+  volume   Float
+  adjClose Float?
+
+  @@unique([stockId, date])
+  @@index([stockId, date])
+}
+
+model Fundamental {
+  id           String   @id @default(cuid())
+  stockId      String
+  stock        Stock    @relation(fields: [stockId], references: [id], onDelete: Cascade)
+  date         DateTime
+  pe           Float?
+  forwardPe    Float?
+  pb           Float?
+  ps           Float?
+  evEbitda     Float?
+  debtEquity   Float?
+  roe          Float?
+  revenueGrowth Float?
+  earningsGrowth Float?
+  dividendYield Float?
+  beta         Float?
+
+  @@unique([stockId, date])
+  @@index([stockId, date])
+}
+
+model Feature {
+  id        String   @id @default(cuid())
+  stockId   String
+  stock     Stock    @relation(fields: [stockId], references: [id], onDelete: Cascade)
+  date      DateTime
+  name      String
+  value     Float
+
+  @@unique([stockId, date, name])
+  @@index([stockId, date])
+}
+
+model Forecast {
+  id          String   @id @default(cuid())
+  stockId     String
+  stock       Stock    @relation(fields: [stockId], references: [id], onDelete: Cascade)
+  runId       String
+  run         ForecastRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  horizon     String
+  targetDate  DateTime
+  pLow        Float
+  pMid        Float
+  pHigh       Float
+  confidence  Float
+  score       Float?
+  rank        Int?
+
+  @@index([runId])
+  @@index([stockId, runId])
+}
+
+model ForecastRun {
+  id         String     @id @default(cuid())
+  startedAt  DateTime   @default(now())
+  completedAt DateTime?
+  horizon    String
+  rankMode   String
+  universe   String[]
+  status     String     @default("running")
+  forecasts  Forecast[]
+  backtests  Backtest[]
+
+  @@index([status])
+}
+
+model Backtest {
+  id          String      @id @default(cuid())
+  runId       String
+  run         ForecastRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  startDate   DateTime
+  endDate     DateTime
+  totalReturn Float
+  sharpe      Float?
+  maxDrawdown Float?
+  winRate     Float?
+  trades      Int?
+  equity      Json?
+  createdAt   DateTime    @default(now())
+
+  @@index([runId])
+}
+
+model News {
+  id          String   @id @default(cuid())
+  stockId     String?
+  stock       Stock?   @relation(fields: [stockId], references: [id], onDelete: Cascade)
+  headline    String
+  summary     String?
+  source      String?
+  url         String?
+  sentiment   Float?
+  publishedAt DateTime
+  createdAt   DateTime @default(now())
+
+  @@index([stockId, publishedAt])
+  @@index([publishedAt])
+}
+
+model Ipo {
+  id               String   @id @default(cuid())
+  ticker           String
+  companyName      String
+  exchange         String?
+  filingDate       DateTime?
+  expectedDate     DateTime?
+  priceRangeLow    Float?
+  priceRangeHigh   Float?
+  shares           Float?
+  status           String   @default("upcoming")
+  sector           String?
+  sentiment        Float?
+  riskScore        Float?
+  createdAt        DateTime @default(now())
+
+  @@index([expectedDate])
+  @@index([status])
+}
+
+model Setting {
+  id    String @id @default(cuid())
+  key   String @unique
+  value String
+}
+
+model ApiKey {
+  id        String   @id @default(cuid())
+  provider  String
+  key       String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  @@unique([provider])
+}
+
+model ModelConfig {
+  id         String   @id @default(cuid())
+  name       String   @unique
+  type       String
+  params     Json
+  isDefault  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model ScheduledJob {
+  id         String    @id @default(cuid())
+  name       String    @unique
+  cron       String
+  isActive   Boolean   @default(true)
+  lastRunAt  DateTime?
+  nextRunAt  DateTime?
+  createdAt  DateTime  @default(now())
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  action    String
+  details   Json?
+  createdAt DateTime @default(now())
+
+  @@index([action])
+  @@index([createdAt])
+}
