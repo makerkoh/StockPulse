@@ -1,6 +1,7 @@
 import type {
   Horizon,
   RankMode,
+  Strategy,
   QuantileForecast,
   ScoredStock,
   IpoEntry,
@@ -179,7 +180,8 @@ function generateForecast(
 export async function runPrediction(
   horizon: Horizon = "1W",
   rankMode: RankMode = "expected_return",
-  universe?: string[]
+  universe?: string[],
+  strategy: Strategy = "swing"
 ): Promise<PredictionResponse> {
   const provider = getProvider();
   const tickers = universe && universe.length > 0 ? universe : DEFAULT_UNIVERSE;
@@ -221,7 +223,7 @@ export async function runPrediction(
     return generateForecast(q.ticker, q.name, q.sector, q.price, fv, horizon);
   });
 
-  const scored: ScoredStock[] = rankStocks(forecasts, featureVectors, rankMode);
+  const scored: ScoredStock[] = rankStocks(forecasts, featureVectors, rankMode, strategy);
 
   // ── PASS 2: Enrich top 5 with detailed data ──────────────────────
   const topTickers = scored.slice(0, 5).map((s) => s.ticker);
@@ -271,7 +273,7 @@ export async function runPrediction(
       const quote = quotes.find((q) => q.ticker === s.ticker)!;
       const fv = featureVectors.get(s.ticker)!;
       const forecast = generateForecast(s.ticker, quote.name, quote.sector, quote.price, fv, horizon);
-      const reScored = rankStocks([forecast], featureVectors, rankMode)[0];
+      const reScored = rankStocks([forecast], featureVectors, rankMode, strategy)[0];
       return { ...reScored, rank: s.rank };
     }
     return s;
@@ -286,6 +288,7 @@ export async function runPrediction(
     meta: {
       horizon,
       rankMode,
+      strategy,
       universe: tickers,
       generatedAt: new Date().toISOString(),
       isDemo: isDemo(),

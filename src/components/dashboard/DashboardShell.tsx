@@ -1,8 +1,8 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import type { PredictionResponse, Horizon, RankMode } from "@/types";
-import { HORIZONS, RANK_MODES, HORIZON_LABELS, RANK_MODE_LABELS } from "@/types";
+import type { PredictionResponse, Horizon, RankMode, Strategy } from "@/types";
+import { HORIZONS, RANK_MODES, HORIZON_LABELS, RANK_MODE_LABELS, STRATEGIES, STRATEGY_LABELS } from "@/types";
 import { Button, Card, Select, Spinner, EmptyState, SkeletonRows } from "@/components/ui";
 import { formatPct, formatCurrency, cn, signColor } from "@/lib/utils";
 import ForecastTable from "./ForecastTable";
@@ -11,6 +11,7 @@ import IpoSection from "@/components/ipo/IpoSection";
 export default function DashboardShell() {
   const [horizon, setHorizon] = useState<Horizon>("1W");
   const [rankMode, setRankMode] = useState<RankMode>("expected_return");
+  const [strategy, setStrategy] = useState<Strategy>("swing");
   const [data, setData] = useState<PredictionResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -22,7 +23,7 @@ export default function DashboardShell() {
       const res = await fetch("/api/predict", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ horizon, rankMode }),
+        body: JSON.stringify({ horizon, rankMode, strategy }),
       });
       const json = await res.json();
       if (json.error) {
@@ -35,7 +36,7 @@ export default function DashboardShell() {
     } finally {
       setLoading(false);
     }
-  }, [horizon, rankMode]);
+  }, [horizon, rankMode, strategy]);
 
   // Summary stats
   const topStock = data?.stocks[0];
@@ -58,6 +59,12 @@ export default function DashboardShell() {
         </div>
 
         <div className="flex flex-wrap items-end gap-3">
+          <Select
+            label="Strategy"
+            value={strategy}
+            onChange={(e) => setStrategy(e.target.value as Strategy)}
+            options={STRATEGIES.map((s) => ({ value: s, label: STRATEGY_LABELS[s] }))}
+          />
           <Select
             label="Horizon"
             value={horizon}

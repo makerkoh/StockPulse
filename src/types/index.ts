@@ -19,6 +19,15 @@ export const RANK_MODE_LABELS: Record<RankMode, string> = {
   value: "Value",
 };
 
+export const STRATEGIES = ["day_trade", "swing", "long_term"] as const;
+export type Strategy = (typeof STRATEGIES)[number];
+
+export const STRATEGY_LABELS: Record<Strategy, string> = {
+  day_trade: "Day Trade",
+  swing: "Swing",
+  long_term: "Long Term",
+};
+
 export const HORIZON_LABELS: Record<Horizon, string> = {
   "1D": "1 Day",
   "1W": "1 Week",
@@ -180,6 +189,7 @@ export interface PredictionResponse {
   meta: {
     horizon: Horizon;
     rankMode: RankMode;
+    strategy: Strategy;
     universe: string[];
     generatedAt: string;
     isDemo: boolean;

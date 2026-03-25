@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { runPrediction } from "@/lib/services/pipeline";
-import type { Horizon, RankMode } from "@/types";
-import { HORIZONS, RANK_MODES } from "@/types";
+import type { Horizon, RankMode, Strategy } from "@/types";
+import { HORIZONS, RANK_MODES, STRATEGIES } from "@/types";
 
-// Allow up to 30 seconds on Vercel (free tier max is 60s for hobby)
 export const maxDuration = 30;
 
 export async function POST(req: NextRequest) {
@@ -17,9 +16,10 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const horizon: Horizon = HORIZONS.includes(body.horizon) ? body.horizon : "1W";
     const rankMode: RankMode = RANK_MODES.includes(body.rankMode) ? body.rankMode : "expected_return";
+    const strategy: Strategy = STRATEGIES.includes(body.strategy) ? body.strategy : "swing";
     const universe: string[] | undefined = Array.isArray(body.universe) ? body.universe : undefined;
 
-    const result = await runPrediction(horizon, rankMode, universe);
+    const result = await runPrediction(horizon, rankMode, universe, strategy);
 
     return NextResponse.json({ data: result });
   } catch (err) {
