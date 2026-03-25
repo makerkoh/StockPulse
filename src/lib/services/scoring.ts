@@ -56,6 +56,25 @@ export function scoreStock(
   const sentimentRaw = (f.avg_sentiment ?? 0) * 10;
   const sentimentBonus = sentimentRaw * w.sentiment;
 
+  // Analyst consensus component
+  let analystRaw = 0;
+  if (f.analyst_consensus != null) {
+    analystRaw += f.analyst_consensus * 10; // -10 to +10
+  }
+  if (f.target_upside != null) {
+    analystRaw += clamp(f.target_upside * 20, -8, 12); // Price target signal
+  }
+  const analystBonus = analystRaw * w.fundamentals; // Weight by strategy
+
+  // Earnings momentum component
+  let earningsRaw = 0;
+  if (f.earnings_beat === 1) earningsRaw += 5;
+  if (f.last_earnings_surprise != null) {
+    earningsRaw += clamp(f.last_earnings_surprise * 0.5, -5, 8);
+  }
+  // Earnings imminent = higher volatility = good for day traders
+  if (f.earnings_imminent === 1) earningsRaw += w.volatility > 0 ? 5 : -3;
+
   // Insider trading component
   let insiderRaw = 0;
   if (f.insider_mspr != null) insiderRaw += (f.insider_mspr / 100) * 8;
@@ -86,8 +105,10 @@ export function scoreStock(
       breakdown.insider = insiderBonus;
       breakdown.volatility = volScore;
       breakdown.liquidity = liquidityScore;
+      breakdown.analyst = analystBonus;
+      breakdown.earnings = earningsRaw;
       score = ret * 60 + conf * 25 + Math.min(forecast.riskReward, 3) * 5 +
-        sentimentBonus + insiderBonus + volScore + liquidityScore;
+        sentimentBonus + insiderBonus + analystBonus + earningsRaw + volScore + liquidityScore;
       break;
     }
     case "sharpe": {
@@ -98,8 +119,10 @@ export function scoreStock(
       breakdown.sharpe_estimate = sharpe;
       breakdown.sentiment = sentimentBonus;
       breakdown.insider = insiderBonus;
+      breakdown.analyst = analystBonus;
+      breakdown.earnings = earningsRaw;
       score = sharpe * 30 + forecast.confidence * 20 +
-        sentimentBonus + insiderBonus + liquidityScore;
+        sentimentBonus + insiderBonus + analystBonus + earningsRaw + liquidityScore;
       break;
     }
     case "risk_adjusted": {
@@ -112,8 +135,10 @@ export function scoreStock(
       breakdown.confidence = forecast.confidence * 100;
       breakdown.sentiment = sentimentBonus;
       breakdown.insider = insiderBonus;
+      breakdown.analyst = analystBonus;
+      breakdown.earnings = earningsRaw;
       score = rr * 20 + forecast.confidence * 30 + upside * 50 +
-        sentimentBonus + insiderBonus + volScore;
+        sentimentBonus + insiderBonus + analystBonus + earningsRaw + volScore;
       break;
     }
     case "momentum": {
@@ -129,10 +154,12 @@ export function scoreStock(
       breakdown.volume_ratio = volRatio;
       breakdown.sentiment = sentimentBonus;
       breakdown.insider = insiderBonus;
+      breakdown.analyst = analystBonus;
+      breakdown.earnings = earningsRaw;
       if (adxVal > 0) breakdown.adx_trend = adxVal;
       score = (ret5d * 3 + ret20d * 2 + ret60d * 1.5) * w.momentum +
         (rsiVal > 50 && rsiVal < 80 ? 10 : -5) +
-        liquidityScore + sentimentBonus + insiderBonus +
+        liquidityScore + sentimentBonus + insiderBonus + analystBonus + earningsRaw +
         (adxVal > 25 ? 8 : 0) + volScore;
       break;
     }
@@ -153,6 +180,8 @@ export function scoreStock(
       breakdown.roe = roe;
       breakdown.sentiment = sentimentBonus;
       breakdown.insider = insiderBonus;
+      breakdown.analyst = analystBonus;
+      breakdown.earnings = earningsRaw;
       if (dcfUpside !== 0) breakdown.dcf_upside = dcfUpside;
       if (grossMargin !== 0) breakdown.gross_margin = grossMargin;
 
@@ -161,7 +190,7 @@ export function scoreStock(
         clamp(dcfUpside * 0.3, -10, 15) +
         clamp(grossMargin * 0.1, 0, 8) +
         clamp(netMargin * 0.15, 0, 8)) * w.fundamentals +
-        sentimentBonus + insiderBonus;
+        sentimentBonus + insiderBonus + analystBonus + earningsRaw;
       break;
     }
   }

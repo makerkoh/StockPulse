@@ -126,6 +126,24 @@ function generateForecast(
   const sentimentDrift = (f.avg_sentiment ?? 0) * 0.01 * days;
   const adxMultiplier = f.adx != null && f.adx > 25 ? 1.2 : 1.0;
 
+  // Analyst consensus drift — strong buy/sell consensus shifts prediction
+  let analystDrift = 0;
+  if (f.analyst_consensus != null) {
+    analystDrift = f.analyst_consensus * 0.01 * days;
+  }
+  // Price target drift — if analysts target higher, add upward bias
+  if (f.target_upside != null) {
+    analystDrift += Math.max(-0.02, Math.min(0.02, f.target_upside * 0.03)) * days;
+  }
+
+  // Earnings proximity — increase volatility estimate near earnings
+  let earningsVolBoost = 1.0;
+  if (f.earnings_imminent === 1) {
+    earningsVolBoost = 1.5; // 50% more volatility expected near earnings
+  }
+  // Last earnings beat/miss momentum
+  const earningsDrift = (f.last_earnings_surprise ?? 0) * 0.001 * days;
+
   // Insider trading signal — cluster buying is very strong
   let insiderDrift = 0;
   if (f.insider_mspr != null) {
@@ -141,10 +159,10 @@ function generateForecast(
     else if (f.fed_rate < 2) macroAdjust = 0.001 * days;
   }
 
-  const annualizedDrift = (momentumDrift + rsiSignal + trendBonus + valueTilt + dcfBonus + sentimentDrift + insiderDrift + macroAdjust) * adxMultiplier;
+  const annualizedDrift = (momentumDrift + rsiSignal + trendBonus + valueTilt + dcfBonus + sentimentDrift + insiderDrift + analystDrift + earningsDrift + macroAdjust) * adxMultiplier;
   const periodReturn = annualizedDrift * (days / 252);
   const baseVol = f.volatility_20d ? f.volatility_20d / currentPrice : 0.02;
-  const periodVol = baseVol * Math.sqrt(days);
+  const periodVol = baseVol * Math.sqrt(days) * earningsVolBoost;
 
   const pMid = currentPrice * (1 + periodReturn);
   const pLow = currentPrice * (1 + periodReturn - 1.28 * periodVol);
@@ -230,8 +248,8 @@ export async function runPrediction(
   const to = new Date();
   const from = new Date(Date.now() - 365 * 86_400_000);
 
-  // Fetch prices, news, and insider data for top 5 in parallel
-  const [enrichedPrices, enrichedNews, enrichedInsider] = await Promise.all([
+  // Fetch prices, news, insider, analyst, and earnings data for top 5 in parallel
+  const [enrichedPrices, enrichedNews, enrichedInsider, enrichedAnalyst, enrichedEarnings] = await Promise.all([
     Promise.all(
       topTickers.map(async (t) => {
         const bars = await provider.getHistoricalPrices(t, from, to);
@@ -250,19 +268,33 @@ export async function runPrediction(
         return [t, insider] as const;
       })
     ).then((entries) => new Map(entries)),
+    Promise.all(
+      topTickers.map(async (t) => {
+        const analyst = await provider.getAnalystData(t);
+        return [t, analyst] as const;
+      })
+    ).then((entries) => new Map(entries)),
+    Promise.all(
+      topTickers.map(async (t) => {
+        const earnings = await provider.getEarningsData(t);
+        return [t, earnings] as const;
+      })
+    ).then((entries) => new Map(entries)),
   ]);
 
-  // Rebuild features for top 5 with full data including insider signals
+  // Rebuild features for top 5 with full data including all signals
   for (const ticker of topTickers) {
     const bars = enrichedPrices.get(ticker) || [];
     const fund = fundamentalsMap.get(ticker) || null;
     const news = enrichedNews.get(ticker) || [];
     const sentiment = buildSentiment(news);
     const insider = enrichedInsider.get(ticker) || null;
+    const analyst = enrichedAnalyst.get(ticker) || null;
+    const earnings = enrichedEarnings.get(ticker) || null;
     if (bars.length > 0) {
       featureVectors.set(
         ticker,
-        buildFeatures(ticker, bars, fund, null, null, sentiment, insider)
+        buildFeatures(ticker, bars, fund, null, null, sentiment, insider, analyst, earnings)
       );
     }
   }

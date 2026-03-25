@@ -155,6 +155,24 @@ export interface InsiderData {
   clusterBuying: boolean;   // 3+ insiders buying within 30 days
 }
 
+// ─── Analyst Data ───────────────────────────────────────────────────
+export interface AnalystData {
+  targetPrice: number | null;     // Consensus price target
+  strongBuy: number;
+  buy: number;
+  hold: number;
+  sell: number;
+  strongSell: number;
+  consensusScore: number;         // -1 (strong sell) to +1 (strong buy)
+}
+
+// ─── Earnings Data ──────────────────────────────────────────────────
+export interface EarningsData {
+  daysUntilEarnings: number | null;  // Days until next earnings report
+  lastSurprisePct: number | null;    // Last earnings surprise %
+  lastBeatOrMiss: "beat" | "miss" | "met" | null;
+}
+
 // ─── Feature Vector ──────────────────────────────────────────────────
 export interface FeatureVector {
   ticker: string;

@@ -6,6 +6,8 @@ import type {
   EconomicContext,
   SentimentData,
   InsiderData,
+  AnalystData,
+  EarningsData,
 } from "@/types";
 
 // ─── Technical Features from Price Bars ──────────────────────────────
@@ -97,6 +99,8 @@ export function buildFeatures(
   economicContext?: EconomicContext | null,
   sentiment?: SentimentData | null,
   insider?: InsiderData | null,
+  analyst?: AnalystData | null,
+  earnings?: EarningsData | null,
 ): FeatureVector {
   const closes = bars.map((b) => b.close);
   const volumes = bars.map((b) => b.volume);
@@ -203,6 +207,32 @@ export function buildFeatures(
       : 0.5;
     // Sentiment strength: how polarized the news is
     features.sentiment_strength = Math.abs(sentiment.avgSentiment);
+  }
+
+  // Analyst consensus features
+  if (analyst) {
+    features.analyst_consensus = analyst.consensusScore; // -1 to +1
+    features.analyst_total = analyst.strongBuy + analyst.buy + analyst.hold + analyst.sell + analyst.strongSell;
+    features.analyst_buy_pct = features.analyst_total > 0
+      ? (analyst.strongBuy + analyst.buy) / features.analyst_total
+      : 0.5;
+    // Price target upside/downside
+    if (analyst.targetPrice != null && currentPrice > 0) {
+      features.target_upside = (analyst.targetPrice - currentPrice) / currentPrice;
+    }
+  }
+
+  // Earnings features
+  if (earnings) {
+    if (earnings.daysUntilEarnings != null) {
+      features.days_to_earnings = earnings.daysUntilEarnings;
+      // Earnings proximity volatility flag (stocks move more near earnings)
+      features.earnings_imminent = earnings.daysUntilEarnings <= 7 ? 1 : 0;
+    }
+    if (earnings.lastSurprisePct != null) {
+      features.last_earnings_surprise = earnings.lastSurprisePct;
+      features.earnings_beat = earnings.lastBeatOrMiss === "beat" ? 1 : 0;
+    }
   }
 
   // Insider trading features

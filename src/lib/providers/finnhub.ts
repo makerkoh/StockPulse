@@ -5,6 +5,8 @@ import type {
   NewsItem,
   IpoEntry,
   InsiderData,
+  AnalystData,
+  EarningsData,
 } from "@/types";
 import type {
   MarketDataProvider,
@@ -337,6 +339,58 @@ export class FinnhubProvider
       netBuyValue,
       clusterBuying: recentBuyers.size >= 3,
     };
+  }
+
+  async getAnalystData(ticker: string): Promise<AnalystData | null> {
+    const data = await this.fetch<any[]>("/stock/recommendation", { symbol: ticker });
+    if (!data || !Array.isArray(data) || data.length === 0) return null;
+    const latest = data[0];
+    const sb = latest.strongBuy || 0;
+    const b = latest.buy || 0;
+    const h = latest.hold || 0;
+    const s = latest.sell || 0;
+    const ss = latest.strongSell || 0;
+    const total = sb + b + h + s + ss;
+    // Score: weighted average from -1 (all strong sell) to +1 (all strong buy)
+    const consensusScore = total > 0
+      ? (sb * 1 + b * 0.5 + h * 0 + s * -0.5 + ss * -1) / total
+      : 0;
+
+    // Also fetch price target
+    const targetData = await this.fetch<any>("/stock/price-target", { symbol: ticker });
+    const targetPrice = targetData?.targetMean ?? targetData?.targetMedian ?? null;
+
+    return { targetPrice, strongBuy: sb, buy: b, hold: h, sell: s, strongSell: ss, consensusScore };
+  }
+
+  async getEarningsData(ticker: string): Promise<EarningsData | null> {
+    const from = new Date().toISOString().split("T")[0];
+    const to = new Date(Date.now() + 90 * 86_400_000).toISOString().split("T")[0];
+    const [upcoming, surprises] = await Promise.all([
+      this.fetch<any>("/calendar/earnings", { symbol: ticker, from, to }),
+      this.fetch<any[]>("/stock/earnings", { symbol: ticker, limit: "1" }),
+    ]);
+
+    let daysUntilEarnings: number | null = null;
+    if (upcoming?.earningsCalendar && Array.isArray(upcoming.earningsCalendar) && upcoming.earningsCalendar.length > 0) {
+      const nextDate = upcoming.earningsCalendar[0].date;
+      if (nextDate) {
+        const diff = new Date(nextDate).getTime() - Date.now();
+        daysUntilEarnings = Math.ceil(diff / 86_400_000);
+      }
+    }
+
+    let lastSurprisePct: number | null = null;
+    let lastBeatOrMiss: "beat" | "miss" | "met" | null = null;
+    if (surprises && Array.isArray(surprises) && surprises.length > 0) {
+      const last = surprises[0];
+      if (last.actual != null && last.estimate != null && last.estimate !== 0) {
+        lastSurprisePct = ((last.actual - last.estimate) / Math.abs(last.estimate)) * 100;
+        lastBeatOrMiss = lastSurprisePct > 1 ? "beat" : lastSurprisePct < -1 ? "miss" : "met";
+      }
+    }
+
+    return { daysUntilEarnings, lastSurprisePct, lastBeatOrMiss };
   }
 }
 

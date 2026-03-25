@@ -7,6 +7,8 @@ import type {
   TechnicalIndicators,
   EconomicContext,
   InsiderData,
+  AnalystData,
+  EarningsData,
 } from "@/types";
 import type {
   MarketDataProvider,
@@ -165,6 +167,22 @@ export class AggregatedProvider
   async getInsiderData(ticker: string): Promise<InsiderData | null> {
     if (this.finnhub) {
       return this.finnhub.getInsiderData(ticker);
+    }
+    return null;
+  }
+
+  // ─── Analyst Data: Finnhub only ───────────────────────────────────
+  async getAnalystData(ticker: string): Promise<AnalystData | null> {
+    if (this.finnhub) {
+      return this.finnhub.getAnalystData(ticker);
+    }
+    return null;
+  }
+
+  // ─── Earnings Data: Finnhub only ──────────────────────────────────
+  async getEarningsData(ticker: string): Promise<EarningsData | null> {
+    if (this.finnhub) {
+      return this.finnhub.getEarningsData(ticker);
     }
     return null;
   }
