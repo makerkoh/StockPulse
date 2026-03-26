@@ -215,7 +215,7 @@ export default function BacktestPage() {
                     <Tooltip
                       contentStyle={{ backgroundColor: "var(--surface-2)", border: "1px solid var(--border)", borderRadius: "8px", fontSize: "12px", color: "var(--text-primary)" }}
                       labelFormatter={(d: string) => new Date(d).toLocaleDateString()}
-                      formatter={(v: number, name: string) => ["$" + v.toFixed(2), name === "value" ? "Strategy" : "Benchmark"]} />
+                      formatter={(v: number, name: string) => ["$" + v.toFixed(2), name]} />
                     <Legend wrapperStyle={{ fontSize: "11px", color: "var(--text-secondary)" }} />
                     <Line type="monotone" dataKey="value" name="Strategy" stroke="var(--accent)" strokeWidth={2} dot={false} />
                     <Line type="monotone" dataKey="benchmark" name="Benchmark" stroke="var(--text-tertiary)" strokeWidth={1} strokeDasharray="4 4" dot={false} />
