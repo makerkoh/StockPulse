@@ -8,22 +8,53 @@ import type {
   PredictionResponse,
   FeatureVector,
   SentimentData,
-  TechnicalIndicators,
-  EconomicContext,
   NewsItem,
-  PriceBar,
   FundamentalData,
-  InsiderData,
 } from "@/types";
 import { getProvider, isDemo } from "@/lib/providers/registry";
 import { DEFAULT_UNIVERSE } from "@/lib/providers/interfaces";
 import { buildFeatures } from "./features";
 import { rankStocks } from "./scoring";
-import { seededRandom } from "@/lib/utils";
 
 const HORIZON_DAYS: Record<Horizon, number> = {
   "1D": 1, "1W": 5, "1M": 21, "3M": 63, "6M": 126,
 };
+
+// ─── Keyword-based sentiment scoring ────────────────────────────────
+// Finnhub doesn't provide inline sentiment, so we score from headlines
+const BULLISH_KEYWORDS = [
+  "upgrade", "beat", "surpass", "outperform", "bullish", "growth", "profit",
+  "record", "strong", "surge", "rally", "soar", "boost", "exceed", "positive",
+  "buy", "overweight", "raise", "higher", "gain", "expand", "innovation",
+  "breakthrough", "partnership", "contract", "dividend", "buyback", "approval",
+];
+const BEARISH_KEYWORDS = [
+  "downgrade", "miss", "underperform", "bearish", "decline", "loss", "weak",
+  "cut", "sell", "underweight", "lower", "drop", "fall", "layoff", "lawsuit",
+  "investigation", "recall", "warning", "debt", "default", "bankruptcy",
+  "negative", "concern", "risk", "slowdown", "tariff", "sanction", "fine",
+];
+
+function scoreHeadlineSentiment(headline: string): number {
+  const lower = headline.toLowerCase();
+  let score = 0;
+  for (const kw of BULLISH_KEYWORDS) {
+    if (lower.includes(kw)) score += 0.15;
+  }
+  for (const kw of BEARISH_KEYWORDS) {
+    if (lower.includes(kw)) score -= 0.15;
+  }
+  return Math.max(-1, Math.min(1, score));
+}
+
+function applyNewsSentiment(news: NewsItem[]): NewsItem[] {
+  return news.map((item) => ({
+    ...item,
+    sentiment: item.sentiment !== 0
+      ? item.sentiment // Keep if provider already scored it
+      : scoreHeadlineSentiment(item.headline),
+  }));
+}
 
 // ─── Build sentiment from news items ────────────────────────────────
 function buildSentiment(news: NewsItem[]): SentimentData {
@@ -46,64 +77,8 @@ function buildSentiment(news: NewsItem[]): SentimentData {
   };
 }
 
-// ─── Quick feature vector from quote data only (no historical bars) ─
-function buildQuickFeatures(
-  ticker: string,
-  price: number,
-  fundamentals: FundamentalData | null,
-  sentiment?: SentimentData | null,
-  economicContext?: EconomicContext | null,
-): FeatureVector {
-  const features: Record<string, number> = {};
-
-  // Without price history, use basic signals
-  features.return_1d = 0;
-  features.return_5d = 0;
-  features.return_20d = 0;
-  features.return_60d = 0;
-  features.rsi_14 = 50;
-  features.golden_cross = 0;
-  features.volatility_20d = price * 0.02; // assume 2% vol
-  features.volume_ratio = 1;
-
-  if (fundamentals) {
-    features.pe = fundamentals.pe ?? 0;
-    features.forward_pe = fundamentals.forwardPe ?? 0;
-    features.pb = fundamentals.pb ?? 0;
-    features.ps = fundamentals.ps ?? 0;
-    features.ev_ebitda = fundamentals.evEbitda ?? 0;
-    features.debt_equity = fundamentals.debtEquity ?? 0;
-    features.roe = fundamentals.roe ?? 0;
-    features.revenue_growth = fundamentals.revenueGrowth ?? 0;
-    features.earnings_growth = fundamentals.earningsGrowth ?? 0;
-    features.dividend_yield = fundamentals.dividendYield ?? 0;
-    features.beta = fundamentals.beta ?? 0;
-
-    if ("dcf" in fundamentals && fundamentals.dcf !== undefined) {
-      const ext = fundamentals as import("@/types").ExtendedFundamentals;
-      if (ext.dcf != null && price > 0) features.dcf_upside = (ext.dcf - price) / price;
-      if (ext.grossMargin != null) features.gross_margin = ext.grossMargin;
-      if (ext.netMargin != null) features.net_margin = ext.netMargin;
-    }
-  }
-
-  if (sentiment) {
-    features.avg_sentiment = sentiment.avgSentiment;
-    features.sentiment_count = sentiment.sentimentCount;
-    features.bullish_ratio = sentiment.sentimentCount > 0 ? sentiment.bullishCount / sentiment.sentimentCount : 0.5;
-    features.sentiment_strength = Math.abs(sentiment.avgSentiment);
-  }
-
-  if (economicContext) {
-    if (economicContext.gdpGrowth != null) features.gdp_growth = economicContext.gdpGrowth;
-    if (economicContext.cpiYoy != null) features.cpi_yoy = economicContext.cpiYoy;
-    if (economicContext.fedFundsRate != null) features.fed_rate = economicContext.fedFundsRate;
-  }
-
-  return { ticker, date: new Date().toISOString().split("T")[0], features };
-}
-
 // ─── Generate Quantile Forecast ──────────────────────────────────────
+// Uses return-based volatility (already annualized from features.ts)
 function generateForecast(
   ticker: string,
   name: string,
@@ -114,24 +89,29 @@ function generateForecast(
 ): QuantileForecast {
   const f = features.features;
   const days = HORIZON_DAYS[horizon];
-  const rng = seededRandom(ticker + horizon + new Date().toISOString().split("T")[0]);
 
+  // --- Drift components ---
   const momentumDrift = (f.return_5d || 0) * 0.3 + (f.return_20d || 0) * 0.5;
   const rsiVal = f.av_rsi_14 ?? f.rsi_14 ?? 50;
   const rsiSignal = (50 - rsiVal) / 200;
   const trendBonus = f.golden_cross ? 0.002 * days : -0.001 * days;
+
+  // Value signals
   const pe = f.pe || 25;
   const valueTilt = pe < 15 ? 0.001 * days : pe > 40 ? -0.001 * days : 0;
   const dcfBonus = f.dcf_upside != null ? Math.max(-0.02, Math.min(0.02, f.dcf_upside * 0.05)) * days : 0;
+
+  // Sentiment (now keyword-scored for live data)
   const sentimentDrift = (f.avg_sentiment ?? 0) * 0.01 * days;
+
+  // ADX trend multiplier
   const adxMultiplier = f.adx != null && f.adx > 25 ? 1.2 : 1.0;
 
-  // Analyst consensus drift — strong buy/sell consensus shifts prediction
+  // Analyst consensus drift
   let analystDrift = 0;
   if (f.analyst_consensus != null) {
     analystDrift = f.analyst_consensus * 0.01 * days;
   }
-  // Price target drift — if analysts target higher, add upward bias
   if (f.target_upside != null) {
     analystDrift += Math.max(-0.02, Math.min(0.02, f.target_upside * 0.03)) * days;
   }
@@ -139,40 +119,55 @@ function generateForecast(
   // Earnings proximity — increase volatility estimate near earnings
   let earningsVolBoost = 1.0;
   if (f.earnings_imminent === 1) {
-    earningsVolBoost = 1.5; // 50% more volatility expected near earnings
+    earningsVolBoost = 1.5;
   }
-  // Last earnings beat/miss momentum
   const earningsDrift = (f.last_earnings_surprise ?? 0) * 0.001 * days;
 
-  // Insider trading signal — cluster buying is very strong
+  // Insider trading signal
   let insiderDrift = 0;
   if (f.insider_mspr != null) {
-    insiderDrift = (f.insider_mspr / 100) * 0.015 * days; // MSPR scaled to drift
+    insiderDrift = (f.insider_mspr / 100) * 0.015 * days;
   }
   if (f.insider_cluster === 1) {
-    insiderDrift += 0.01 * days; // Strong bonus for cluster buying
+    insiderDrift += 0.01 * days;
   }
 
+  // Mean reversion (contrarian)
+  const mrzDrift = f.mean_reversion_z != null
+    ? -f.mean_reversion_z * 0.003 * days  // Mean revert: extreme z -> opposite drift
+    : 0;
+
+  // Macro
   let macroAdjust = 0;
   if (f.fed_rate != null && f.cpi_yoy != null) {
     if (f.fed_rate > 4 && f.cpi_yoy > 3) macroAdjust = -0.001 * days;
     else if (f.fed_rate < 2) macroAdjust = 0.001 * days;
   }
 
-  const annualizedDrift = (momentumDrift + rsiSignal + trendBonus + valueTilt + dcfBonus + sentimentDrift + insiderDrift + analystDrift + earningsDrift + macroAdjust) * adxMultiplier;
+  const annualizedDrift = (
+    momentumDrift + rsiSignal + trendBonus + valueTilt + dcfBonus +
+    sentimentDrift + insiderDrift + analystDrift + earningsDrift +
+    mrzDrift + macroAdjust
+  ) * adxMultiplier;
+
   const periodReturn = annualizedDrift * (days / 252);
-  const baseVol = f.volatility_20d ? f.volatility_20d / currentPrice : 0.02;
-  const periodVol = baseVol * Math.sqrt(days) * earningsVolBoost;
+
+  // VOLATILITY: now return-based and already annualized from features.ts
+  // volatility_20d is annualized return vol, so scale to period directly
+  const annualVol = f.volatility_20d || 0.25; // Default 25% annual vol if missing
+  const periodVol = (annualVol / Math.sqrt(252)) * Math.sqrt(days) * earningsVolBoost;
 
   const pMid = currentPrice * (1 + periodReturn);
   const pLow = currentPrice * (1 + periodReturn - 1.28 * periodVol);
   const pHigh = currentPrice * (1 + periodReturn + 1.28 * periodVol);
 
+  // CONFIDENCE: deterministic, no random noise
   const volConfidence = Math.max(0, 1 - periodVol * 3);
-  const featureCount = Object.keys(f).length;
+  const featureCount = Object.keys(f).filter((k) => !k.startsWith("_")).length;
   const dataConfidence = Math.min(featureCount / 30, 1);
   const sentimentConfidence = f.sentiment_strength != null ? f.sentiment_strength * 0.1 : 0;
-  const confidence = (volConfidence * 0.5 + dataConfidence * 0.35 + sentimentConfidence * 0.15) * (0.85 + rng() * 0.15);
+  const hasFullData = f._has_60d_data === 1 ? 0.1 : 0;
+  const confidence = volConfidence * 0.45 + dataConfidence * 0.3 + sentimentConfidence * 0.1 + hasFullData + 0.05;
 
   const expectedReturn = (pMid - currentPrice) / currentPrice;
   const downside = Math.max(currentPrice - pLow, 0.01);
@@ -192,9 +187,8 @@ function generateForecast(
 }
 
 // ─── Run Full Prediction Pipeline ────────────────────────────────────
-// Optimized for Vercel's 10-second timeout:
-// Pass 1: Batch quotes (1 call) + parallel fundamentals for top sectors
-// Pass 2: Enrich top 5 with historical prices + technicals
+// Architecture: fetch ALL historical data for the full universe, then rank.
+// No more crude pass-1 shortlisting — every stock gets real features.
 export async function runPrediction(
   horizon: Horizon = "1W",
   rankMode: RankMode = "expected_return",
@@ -203,62 +197,82 @@ export async function runPrediction(
 ): Promise<PredictionResponse> {
   const provider = getProvider();
   const tickers = universe && universe.length > 0 ? universe : DEFAULT_UNIVERSE;
+  const to = new Date();
+  const from = new Date(Date.now() - 365 * 86_400_000);
 
-  // ── PASS 1: Fast batch data (should complete in 2-3 seconds) ──────
-  // Batch quotes (FMP: 1 API call for all 40 tickers)
+  // ── Fetch all data in parallel batches ──────────────────────────
+  // 1) Batch quotes (FMP: 1 API call for all tickers)
   const quotes = await provider.getQuotes(tickers);
+  const quoteMap = new Map(quotes.map((q) => [q.ticker, q]));
 
-  // Fetch fundamentals in parallel batches of 10 to stay within timeout
-  const batchSize = 10;
+  // 2) Fetch fundamentals + historical prices in parallel batches
+  const batchSize = 8;
   const fundamentalsMap = new Map<string, FundamentalData | null>();
+  const pricesMap = new Map<string, import("@/types").PriceBar[]>();
+
   for (let i = 0; i < tickers.length; i += batchSize) {
     const batch = tickers.slice(i, i + batchSize);
     const results = await Promise.all(
       batch.map(async (t) => {
-        const fund = await provider.getFundamentals(t);
-        return [t, fund] as const;
+        const [fund, bars] = await Promise.all([
+          provider.getFundamentals(t),
+          provider.getHistoricalPrices(t, from, to),
+        ]);
+        return { ticker: t, fund, bars };
       })
     );
-    for (const [t, fund] of results) {
-      fundamentalsMap.set(t, fund);
+    for (const { ticker, fund, bars } of results) {
+      fundamentalsMap.set(ticker, fund);
+      pricesMap.set(ticker, bars);
     }
   }
 
-  // Build quick feature vectors (no historical bars needed)
+  // 3) Build FULL feature vectors for every ticker
   const featureVectors = new Map<string, FeatureVector>();
   for (const ticker of tickers) {
-    const quote = quotes.find((q) => q.ticker === ticker);
+    const bars = pricesMap.get(ticker) || [];
     const fund = fundamentalsMap.get(ticker) || null;
-    featureVectors.set(
-      ticker,
-      buildQuickFeatures(ticker, quote?.price || 0, fund)
-    );
+    if (bars.length > 5) {
+      featureVectors.set(ticker, buildFeatures(ticker, bars, fund));
+    } else {
+      // Fallback: minimal features from quote only
+      const quote = quoteMap.get(ticker);
+      const price = quote?.price || 0;
+      const features: Record<string, number> = {
+        volatility_20d: 0.25, // Default 25% annual vol
+        _has_60d_data: 0,
+        _has_200d_data: 0,
+        _has_fundamentals: fund ? 1 : 0,
+      };
+      if (fund) {
+        features.pe = fund.pe ?? 0;
+        features.pb = fund.pb ?? 0;
+        features.roe = fund.roe ?? 0;
+        features.dividend_yield = fund.dividendYield ?? 0;
+      }
+      featureVectors.set(ticker, { ticker, date: new Date().toISOString().split("T")[0], features });
+    }
   }
 
-  // Generate initial forecasts and rank
-  const forecasts: QuantileForecast[] = quotes.map((q) => {
-    const fv = featureVectors.get(q.ticker)!;
-    return generateForecast(q.ticker, q.name, q.sector, q.price, fv, horizon);
-  });
+  // 4) Generate forecasts for ALL tickers
+  const forecasts: QuantileForecast[] = [];
+  for (const ticker of tickers) {
+    const quote = quoteMap.get(ticker);
+    if (!quote || quote.price <= 0) continue;
+    const fv = featureVectors.get(ticker)!;
+    forecasts.push(generateForecast(ticker, quote.name, quote.sector, quote.price, fv, horizon));
+  }
 
+  // 5) Rank full universe
   const scored: ScoredStock[] = rankStocks(forecasts, featureVectors, rankMode, strategy);
 
-  // ── PASS 2: Enrich top 5 with detailed data ──────────────────────
-  const topTickers = scored.slice(0, 5).map((s) => s.ticker);
-  const to = new Date();
-  const from = new Date(Date.now() - 365 * 86_400_000);
+  // ── PASS 2: Enrich top 10 with news, insider, analyst, earnings ──
+  const topTickers = scored.slice(0, 10).map((s) => s.ticker);
 
-  // Fetch prices, news, insider, analyst, and earnings data for top 5 in parallel
-  const [enrichedPrices, enrichedNews, enrichedInsider, enrichedAnalyst, enrichedEarnings] = await Promise.all([
+  const [enrichedNews, enrichedInsider, enrichedAnalyst, enrichedEarnings] = await Promise.all([
     Promise.all(
       topTickers.map(async (t) => {
-        const bars = await provider.getHistoricalPrices(t, from, to);
-        return [t, bars] as const;
-      })
-    ).then((entries) => new Map(entries)),
-    Promise.all(
-      topTickers.map(async (t) => {
-        const news = await provider.getNews(t, 10);
+        const news = applyNewsSentiment(await provider.getNews(t, 10));
         return [t, news] as const;
       })
     ).then((entries) => new Map(entries)),
@@ -282,16 +296,16 @@ export async function runPrediction(
     ).then((entries) => new Map(entries)),
   ]);
 
-  // Rebuild features for top 5 with full data including all signals
+  // Rebuild features for top 10 with all signal data
   for (const ticker of topTickers) {
-    const bars = enrichedPrices.get(ticker) || [];
+    const bars = pricesMap.get(ticker) || [];
     const fund = fundamentalsMap.get(ticker) || null;
     const news = enrichedNews.get(ticker) || [];
     const sentiment = buildSentiment(news);
     const insider = enrichedInsider.get(ticker) || null;
     const analyst = enrichedAnalyst.get(ticker) || null;
     const earnings = enrichedEarnings.get(ticker) || null;
-    if (bars.length > 0) {
+    if (bars.length > 5) {
       featureVectors.set(
         ticker,
         buildFeatures(ticker, bars, fund, null, null, sentiment, insider, analyst, earnings)
@@ -299,17 +313,17 @@ export async function runPrediction(
     }
   }
 
-  // Re-generate forecasts for enriched tickers
-  const finalStocks: ScoredStock[] = scored.map((s) => {
-    if (topTickers.includes(s.ticker)) {
-      const quote = quotes.find((q) => q.ticker === s.ticker)!;
-      const fv = featureVectors.get(s.ticker)!;
-      const forecast = generateForecast(s.ticker, quote.name, quote.sector, quote.price, fv, horizon);
-      const reScored = rankStocks([forecast], featureVectors, rankMode, strategy)[0];
-      return { ...reScored, rank: s.rank };
-    }
-    return s;
-  });
+  // Re-score enriched tickers and globally re-rank
+  const enrichedForecasts: QuantileForecast[] = [];
+  for (const ticker of tickers) {
+    const quote = quoteMap.get(ticker);
+    if (!quote || quote.price <= 0) continue;
+    const fv = featureVectors.get(ticker)!;
+    enrichedForecasts.push(generateForecast(ticker, quote.name, quote.sector, quote.price, fv, horizon));
+  }
+
+  // GLOBAL re-rank — not path-dependent, every stock ranked from same features
+  const finalStocks = rankStocks(enrichedForecasts, featureVectors, rankMode, strategy);
 
   // Fetch IPOs
   const ipos: IpoEntry[] = await provider.getUpcomingIpos();

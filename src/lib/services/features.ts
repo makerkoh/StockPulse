@@ -27,12 +27,61 @@ function ema(prices: number[], window: number): number {
   return e;
 }
 
-function stdDev(prices: number[], window: number): number {
-  if (prices.length < window) return 0;
-  const slice = prices.slice(-window);
+function stdDev(values: number[], window: number): number {
+  if (values.length < window) return 0;
+  const slice = values.slice(-window);
   const mean = slice.reduce((a, b) => a + b, 0) / window;
   const variance = slice.reduce((a, b) => a + (b - mean) ** 2, 0) / window;
   return Math.sqrt(variance);
+}
+
+/** Compute log returns from price series */
+function logReturns(prices: number[]): number[] {
+  const ret: number[] = [];
+  for (let i = 1; i < prices.length; i++) {
+    if (prices[i - 1] > 0 && prices[i] > 0) {
+      ret.push(Math.log(prices[i] / prices[i - 1]));
+    }
+  }
+  return ret;
+}
+
+/** Return-based volatility (annualized) over a rolling window */
+function returnVolatility(prices: number[], window: number): number {
+  const rets = logReturns(prices);
+  if (rets.length < window) return NaN;
+  return stdDev(rets, window) * Math.sqrt(252);
+}
+
+/** 52-week high/low position (0 = at low, 1 = at high) */
+function yearPosition(prices: number[]): number {
+  if (prices.length < 2) return 0.5;
+  const window = Math.min(prices.length, 252);
+  const slice = prices.slice(-window);
+  const hi = Math.max(...slice);
+  const lo = Math.min(...slice);
+  if (hi === lo) return 0.5;
+  return (prices[prices.length - 1] - lo) / (hi - lo);
+}
+
+/** Drawdown from 52-week high */
+function drawdownFromHigh(prices: number[]): number {
+  if (prices.length < 2) return 0;
+  const window = Math.min(prices.length, 252);
+  const slice = prices.slice(-window);
+  const hi = Math.max(...slice);
+  if (hi === 0) return 0;
+  return (prices[prices.length - 1] - hi) / hi;
+}
+
+/** Mean reversion z-score: how far price is from its 60-day mean in vol units */
+function meanReversionZ(prices: number[]): number {
+  if (prices.length < 60) return 0;
+  const mean = sma(prices, 60);
+  const rets = logReturns(prices);
+  const vol = stdDev(rets, 60);
+  if (vol === 0 || mean === 0) return 0;
+  return (prices[prices.length - 1] - mean) / (mean * vol);
 }
 
 function rsi(prices: number[], window = 14): number {
@@ -108,11 +157,14 @@ export function buildFeatures(
 
   const features: Record<string, number> = {};
 
-  // Momentum
+  // Momentum — multiple horizons
   features.return_1d = returns(closes, 1);
   features.return_5d = returns(closes, 5);
+  features.return_10d = returns(closes, 10);
   features.return_20d = returns(closes, 20);
   features.return_60d = returns(closes, 60);
+  features.return_126d = returns(closes, 126);
+  features.return_252d = returns(closes, 252);
 
   // Moving averages
   features.sma_20 = sma(closes, 20);
@@ -121,7 +173,7 @@ export function buildFeatures(
   features.ema_12 = ema(closes, 12);
   features.ema_26 = ema(closes, 26);
 
-  // Relative position
+  // Relative position to moving averages
   features.price_vs_sma20 = features.sma_20 === 0 ? 0 : currentPrice / features.sma_20 - 1;
   features.price_vs_sma50 = features.sma_50 === 0 ? 0 : currentPrice / features.sma_50 - 1;
   features.price_vs_sma200 = features.sma_200 === 0 ? 0 : currentPrice / features.sma_200 - 1;
@@ -134,19 +186,37 @@ export function buildFeatures(
   features.macd_signal = m.signal;
   features.macd_histogram = m.histogram;
 
-  // Volatility
-  features.volatility_20d = stdDev(closes, 20);
+  // VOLATILITY — computed from RETURNS, not price levels
+  const vol10 = returnVolatility(closes, 10);
+  const vol21 = returnVolatility(closes, 21);
+  const vol63 = returnVolatility(closes, 63);
+  features.volatility_10d = isNaN(vol10) ? 0 : vol10;
+  features.volatility_20d = isNaN(vol21) ? 0 : vol21;  // Keep name for backward compat
+  features.volatility_63d = isNaN(vol63) ? 0 : vol63;
   features.bollinger_position = bollingerPosition(closes, 20);
   features.atr_14 = atr(bars, 14);
+  features.atr_pct = currentPrice > 0 ? features.atr_14 / currentPrice : 0;
+
+  // 52-week position and drawdown
+  features.year_position = yearPosition(closes);
+  features.drawdown_from_high = drawdownFromHigh(closes);
+  features.mean_reversion_z = meanReversionZ(closes);
 
   // Volume
   features.volume_ratio = volumeRatio(volumes, 20);
 
-  // Fundamentals (if available)
+  // Missingness flags — critical for ML: distinguish "no data" from "zero"
+  features._has_60d_data = closes.length >= 60 ? 1 : 0;
+  features._has_200d_data = closes.length >= 200 ? 1 : 0;
+
+  // Fundamentals (if available) — use NaN-safe defaults with missingness flags
+  features._has_fundamentals = fundamentals ? 1 : 0;
   if (fundamentals) {
     features.pe = fundamentals.pe ?? 0;
+    features._pe_missing = fundamentals.pe == null ? 1 : 0;
     features.forward_pe = fundamentals.forwardPe ?? 0;
     features.pb = fundamentals.pb ?? 0;
+    features._pb_missing = fundamentals.pb == null ? 1 : 0;
     features.ps = fundamentals.ps ?? 0;
     features.ev_ebitda = fundamentals.evEbitda ?? 0;
     features.debt_equity = fundamentals.debtEquity ?? 0;
