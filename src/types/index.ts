@@ -92,7 +92,7 @@ export interface IpoEntry {
   priceRangeLow: number;
   priceRangeHigh: number;
   shares: number;
-  status: "upcoming" | "priced" | "withdrawn";
+  status: "upcoming" | "filed" | "priced" | "withdrawn";
   sector: string;
   sentiment: number;
   riskScore: number;
