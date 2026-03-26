@@ -83,13 +83,13 @@ export const DEFAULT_UNIVERSE = [
   "NEE", "PM",
 ];
 
-// Uncomment below to expand to S&P 100 when you upgrade API tiers:
-// export const EXTENDED_UNIVERSE = [
-//   ...DEFAULT_UNIVERSE,
-//   "ADBE", "AMD", "AMGN", "AXP", "BA", "BAC", "BLK", "C", "CAT",
-//   "CL", "COP", "CRM", "CVS", "DE", "DIS", "DOW", "DUK", "EMR",
-//   "F", "FDX", "GD", "GE", "GILD", "GM", "GS", "IBM", "INTC",
-//   "ISRG", "KHC", "LOW", "MDT", "MMM", "MO", "MS", "NKE", "ORCL",
-//   "PFE", "PYPL", "QCOM", "SBUX", "SCHW", "SO", "SPG", "T", "TGT",
-//   "USB", "UNP", "UPS", "WFC",
-// ];
+// S&P 100 — used when "Full Access" mode is selected in the UI
+export const EXTENDED_UNIVERSE = [
+  ...DEFAULT_UNIVERSE,
+  "ADBE", "AMD", "AMGN", "AXP", "BA", "BAC", "BLK", "C", "CAT",
+  "CL", "COP", "CRM", "CVS", "DE", "DIS", "DOW", "DUK", "EMR",
+  "F", "FDX", "GD", "GE", "GILD", "GM", "GS", "IBM", "INTC",
+  "ISRG", "KHC", "LOW", "MDT", "MMM", "MO", "MS", "NKE", "ORCL",
+  "PFE", "PYPL", "QCOM", "SBUX", "SCHW", "SO", "SPG", "T", "TGT",
+  "USB", "UNP", "UPS", "WFC",
+];

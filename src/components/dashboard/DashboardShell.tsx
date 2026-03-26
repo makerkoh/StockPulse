@@ -4,7 +4,7 @@ import { useState, useCallback } from "react";
 import type { PredictionResponse, Horizon, RankMode, Strategy } from "@/types";
 import { HORIZONS, RANK_MODES, HORIZON_LABELS, RANK_MODE_LABELS, STRATEGIES, STRATEGY_LABELS } from "@/types";
 import { Button, Card, Select, Spinner, EmptyState, SkeletonRows } from "@/components/ui";
-import { formatPct, formatCurrency, cn, signColor } from "@/lib/utils";
+import { formatPct, cn, signColor } from "@/lib/utils";
 import ForecastTable from "./ForecastTable";
 import IpoSection from "@/components/ipo/IpoSection";
 
@@ -12,6 +12,7 @@ export default function DashboardShell() {
   const [horizon, setHorizon] = useState<Horizon>("1W");
   const [rankMode, setRankMode] = useState<RankMode>("expected_return");
   const [strategy, setStrategy] = useState<Strategy>("swing");
+  const [apiLimited, setApiLimited] = useState(true); // Default: free tier
   const [data, setData] = useState<PredictionResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -23,7 +24,7 @@ export default function DashboardShell() {
       const res = await fetch("/api/predict", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ horizon, rankMode, strategy }),
+        body: JSON.stringify({ horizon, rankMode, strategy, apiLimited }),
       });
       const json = await res.json();
       if (json.error) {
@@ -36,7 +37,7 @@ export default function DashboardShell() {
     } finally {
       setLoading(false);
     }
-  }, [horizon, rankMode, strategy]);
+  }, [horizon, rankMode, strategy, apiLimited]);
 
   // Summary stats
   const topStock = data?.stocks[0];
@@ -59,6 +60,43 @@ export default function DashboardShell() {
         </div>
 
         <div className="flex flex-wrap items-end gap-3">
+          {/* API Limited toggle */}
+          <div className="flex flex-col">
+            <span className="text-2xs text-text-tertiary uppercase tracking-wider mb-1.5 pl-0.5">
+              API Tier
+            </span>
+            <button
+              onClick={() => setApiLimited(!apiLimited)}
+              className={cn(
+                "px-3 py-2 rounded-lg text-xs font-semibold transition-all duration-200 border",
+                apiLimited
+                  ? "bg-warning/15 border-warning/40 text-warning hover:bg-warning/25"
+                  : "bg-positive/15 border-positive/40 text-positive hover:bg-positive/25"
+              )}
+              title={
+                apiLimited
+                  ? "Free tier: 40 stocks, ~91 API calls/run. Click to use full universe."
+                  : "Full universe: 100 stocks, ~151 API calls/run. Click to switch to free tier."
+              }
+            >
+              {apiLimited ? (
+                <span className="flex items-center gap-1.5">
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                  </svg>
+                  API Limited
+                </span>
+              ) : (
+                <span className="flex items-center gap-1.5">
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M8 11V7a4 4 0 118 0m-4 8v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2z" />
+                  </svg>
+                  Full Access
+                </span>
+              )}
+            </button>
+          </div>
+
           <Select
             label="Strategy"
             value={strategy}
@@ -100,7 +138,7 @@ export default function DashboardShell() {
         </div>
       )}
 
-      {/* Stats cards — show only when data exists */}
+      {/* Stats cards */}
       {data && (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <Card className="p-4">
@@ -159,7 +197,11 @@ export default function DashboardShell() {
         <Card>
           <EmptyState
             title="No predictions yet"
-            description="Configure your horizon and ranking mode, then run a prediction to see scored forecasts for the S&P 40 universe."
+            description={
+              apiLimited
+                ? "Free tier: analyzing S&P 40 universe (~91 API calls). Click 'API Limited' to expand."
+                : "Full access: analyzing S&P 100 universe (~151 API calls)."
+            }
             action={
               <Button onClick={runPrediction}>Run First Prediction</Button>
             }
