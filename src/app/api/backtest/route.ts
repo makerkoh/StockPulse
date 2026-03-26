@@ -86,8 +86,9 @@ export async function POST(req: NextRequest) {
     const topN = 5;
     const txCostBps = 10; // 10 basis points per trade
 
-    // Use a subset of the universe for speed (backtest over 15 liquid names)
-    const backtestUniverse = DEFAULT_UNIVERSE.slice(0, 15);
+    // Use a subset of the universe for speed + API budget
+    // 10 names × 1 historical price call = 10 API calls (very budget-friendly)
+    const backtestUniverse = DEFAULT_UNIVERSE.slice(0, 10);
     const rebalanceDays = HORIZON_DAYS[horizon] || 5;
 
     const provider = getProvider();
