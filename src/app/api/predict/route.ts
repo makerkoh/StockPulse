@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { runPrediction } from "@/lib/services/pipeline";
+import { storePredictionRun } from "@/lib/services/persistence";
 import type { Horizon, RankMode, Strategy } from "@/types";
 import { HORIZONS, RANK_MODES, STRATEGIES } from "@/types";
 
@@ -21,7 +22,26 @@ export async function POST(req: NextRequest) {
 
     const result = await runPrediction(horizon, rankMode, universe, strategy);
 
-    return NextResponse.json({ data: result });
+    // Persist the run to the database (non-blocking — don't fail if DB is down)
+    const featureVectors = result.featureVectors || new Map();
+    storePredictionRun(
+      horizon, rankMode, strategy,
+      result.meta.universe,
+      result.stocks,
+      featureVectors,
+      result.meta.isDemo,
+    ).then((runId) => {
+      if (runId) {
+        result.meta.runId = runId;
+      }
+    }).catch((err) => {
+      console.error("Background persistence failed:", err);
+    });
+
+    // Don't send featureVectors to client (large, not needed in UI)
+    const { featureVectors: _fv, ...clientResult } = result;
+
+    return NextResponse.json({ data: clientResult });
   } catch (err) {
     console.error("Prediction error:", err);
     return NextResponse.json({ error: "Prediction failed" }, { status: 500 });

@@ -204,6 +204,7 @@ export interface ScoredStock extends QuantileForecast {
 export interface PredictionResponse {
   stocks: ScoredStock[];
   ipos: IpoEntry[];
+  featureVectors?: Map<string, FeatureVector>;  // Not serialized to client, used for persistence
   meta: {
     horizon: Horizon;
     rankMode: RankMode;
@@ -211,6 +212,7 @@ export interface PredictionResponse {
     universe: string[];
     generatedAt: string;
     isDemo: boolean;
+    runId?: string;  // Database run ID if persisted
   };
 }
 

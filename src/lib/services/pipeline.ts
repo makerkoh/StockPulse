@@ -331,6 +331,7 @@ export async function runPrediction(
   return {
     stocks: finalStocks,
     ipos,
+    featureVectors,
     meta: {
       horizon,
       rankMode,

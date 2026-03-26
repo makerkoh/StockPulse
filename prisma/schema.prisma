@@ -96,19 +96,22 @@ model Feature {
 }
 
 model Forecast {
-  id          String   @id @default(cuid())
-  stockId     String
-  stock       Stock    @relation(fields: [stockId], references: [id], onDelete: Cascade)
-  runId       String
-  run         ForecastRun @relation(fields: [runId], references: [id], onDelete: Cascade)
-  horizon     String
-  targetDate  DateTime
-  pLow        Float
-  pMid        Float
-  pHigh       Float
-  confidence  Float
-  score       Float?
-  rank        Int?
+  id             String   @id @default(cuid())
+  stockId        String
+  stock          Stock    @relation(fields: [stockId], references: [id], onDelete: Cascade)
+  runId          String
+  run            ForecastRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  horizon        String
+  targetDate     DateTime
+  pLow           Float
+  pMid           Float
+  pHigh          Float
+  confidence     Float
+  expectedReturn Float?
+  riskReward     Float?
+  score          Float?
+  rank           Int?
+  scoreBreakdown Json?
 
   @@index([runId])
   @@index([stockId, runId])
@@ -120,12 +123,28 @@ model ForecastRun {
   completedAt DateTime?
   horizon    String
   rankMode   String
+  strategy   String     @default("swing")
   universe   String[]
   status     String     @default("running")
+  isDemo     Boolean    @default(false)
   forecasts  Forecast[]
   backtests  Backtest[]
+  snapshots  FeatureSnapshot[]
 
   @@index([status])
+  @@index([horizon, rankMode, strategy])
+}
+
+model FeatureSnapshot {
+  id        String   @id @default(cuid())
+  runId     String
+  run       ForecastRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  ticker    String
+  date      DateTime
+  features  Json
+
+  @@unique([runId, ticker])
+  @@index([runId])
 }
 
 model Backtest {
