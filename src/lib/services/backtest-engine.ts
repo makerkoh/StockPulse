@@ -424,11 +424,13 @@ export async function runRealBacktest(config: BacktestConfig): Promise<BacktestO
     ? rankCorrelations.reduce((a, b) => a + b, 0) / rankCorrelations.length
     : 0;
 
-  const totalTrades = periods.reduce((sum, p) => {
-    const newPositions = p.holdings.filter((h) => !prevHoldings.includes(h)).length;
-    prevHoldings = p.holdings;
-    return sum + newPositions;
-  }, 0);
+  let tradeCount = 0;
+  let prevHoldingsForCount: string[] = [];
+  for (const p of periods) {
+    const newPositions = p.holdings.filter((h) => !prevHoldingsForCount.includes(h)).length;
+    tradeCount += newPositions;
+    prevHoldingsForCount = p.holdings;
+  }
 
   return {
     config,
@@ -441,7 +443,7 @@ export async function runRealBacktest(config: BacktestConfig): Promise<BacktestO
     sharpe,
     maxDrawdown,
     winRate,
-    totalTrades: periods.length * topN,
+    totalTrades: tradeCount,
     directionalAccuracy,
     rankCorrelation,
     intervalCoverage,
