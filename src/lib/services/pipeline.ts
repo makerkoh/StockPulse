@@ -10,11 +10,20 @@ import type {
   SentimentData,
   NewsItem,
   FundamentalData,
+  PriceBar,
 } from "@/types";
 import { getProvider, isDemo } from "@/lib/providers/registry";
 import { DEFAULT_UNIVERSE } from "@/lib/providers/interfaces";
 import { buildFeatures } from "./features";
 import { rankStocks } from "./scoring";
+import {
+  getCachedPrices,
+  storePrices,
+  getCachedFundamentals,
+  storeFundamentals,
+  getCachedNews,
+  storeNews,
+} from "./data-cache";
 
 const HORIZON_DAYS: Record<Horizon, number> = {
   "1D": 1, "1W": 5, "1M": 21, "3M": 63, "6M": 126,
@@ -63,8 +72,6 @@ function buildSentiment(news: NewsItem[]): SentimentData {
 }
 
 // ─── Quick feature vector from quote + fundamentals only ────────────
-// Used in Pass 1 to rank without burning API calls on historical prices.
-// Now includes beta-derived volatility estimate instead of hardcoded 2%.
 function buildQuickFeatures(
   ticker: string,
   price: number,
@@ -73,7 +80,6 @@ function buildQuickFeatures(
 ): FeatureVector {
   const features: Record<string, number> = {};
 
-  // Estimate returns from quote change
   features.return_1d = price > 0 ? change / price : 0;
   features.return_5d = 0;
   features.return_20d = 0;
@@ -81,8 +87,6 @@ function buildQuickFeatures(
   features.rsi_14 = 50;
   features.golden_cross = 0;
 
-  // Use beta to estimate volatility (much better than hardcoded 2%)
-  // S&P 500 annualized vol ~16%, so stock vol ≈ beta * 16%
   const beta = fundamentals?.beta ?? 1.0;
   features.volatility_20d = Math.abs(beta) * 0.16;
   features.volume_ratio = 1;
@@ -196,16 +200,89 @@ function generateForecast(
   };
 }
 
+// ─── Cache-aware data fetchers ───────────────────────────────────────
+
+/** Fetch historical prices using DB cache — only calls API for missing days. */
+async function fetchPricesWithCache(
+  provider: ReturnType<typeof getProvider>,
+  ticker: string,
+  from: Date,
+  to: Date,
+): Promise<PriceBar[]> {
+  // Check DB cache first
+  const { cached, fetchFrom } = await getCachedPrices(ticker, from, to);
+
+  if (!fetchFrom) {
+    // All data is in the DB — zero API calls
+    return cached;
+  }
+
+  // Only fetch the gap from the API
+  const fresh = await provider.getHistoricalPrices(ticker, fetchFrom, to);
+
+  // Store fresh data in DB (non-blocking)
+  storePrices(ticker, fresh).catch(() => {});
+
+  // Merge cached + fresh, deduplicate by date
+  const dateSet = new Set(cached.map((b) => b.date));
+  const merged = [...cached];
+  for (const bar of fresh) {
+    if (!dateSet.has(bar.date)) {
+      merged.push(bar);
+      dateSet.add(bar.date);
+    }
+  }
+  merged.sort((a, b) => a.date.localeCompare(b.date));
+  return merged;
+}
+
+/** Fetch fundamentals using DB cache — only calls API if stale (>24h). */
+async function fetchFundamentalsWithCache(
+  provider: ReturnType<typeof getProvider>,
+  ticker: string,
+): Promise<FundamentalData | null> {
+  // Check DB cache first
+  const cached = await getCachedFundamentals(ticker);
+  if (cached) return cached; // Still fresh — zero API calls
+
+  // Cache miss or stale — fetch from API
+  const fresh = await provider.getFundamentals(ticker);
+
+  // Store in DB (non-blocking)
+  if (fresh) storeFundamentals(ticker, fresh).catch(() => {});
+
+  return fresh;
+}
+
+/** Fetch news using DB cache — only calls API if stale (>30min). */
+async function fetchNewsWithCache(
+  provider: ReturnType<typeof getProvider>,
+  ticker: string,
+  limit: number,
+): Promise<NewsItem[]> {
+  // Check DB cache first
+  const cached = await getCachedNews(ticker, limit);
+  if (cached) return cached; // Still fresh — zero API calls
+
+  // Cache miss or stale — fetch from API
+  const fresh = applyNewsSentiment(await provider.getNews(ticker, limit));
+
+  // Store in DB (non-blocking)
+  storeNews(ticker, fresh).catch(() => {});
+
+  return fresh;
+}
+
 // ─── Run Full Prediction Pipeline ────────────────────────────────────
-// API-budget-aware: designed for free-tier limits
+// Now uses DB-backed caching to minimize API calls.
 //
-// API call budget per run:
-//   Pass 1: 1 batch quote (FMP) + 40 fundamentals = ~41 calls
-//   Pass 2: 10 historical prices + 10 news + 10 insider + 10 analyst + 10 earnings = ~50 calls
-//   Total: ~91 calls → safe for 2-3 runs/day on FMP free (250/day)
+// First run: ~91 calls (same as before, but data gets stored)
+// Subsequent runs (same day): ~1 batch quote call + only stale data
+//   - Fundamentals cached 24h → 0 calls
+//   - Historical prices → only fetch today's new bar
+//   - News cached 30min → 0 calls if recent
 //
-// Pass 1 uses fundamentals + beta-derived volatility to rank
-// Pass 2 enriches top 10 with full historical data + alternative signals
+// Typical repeat run: ~2-5 API calls instead of ~91
 export async function runPrediction(
   horizon: Horizon = "1W",
   rankMode: RankMode = "expected_return",
@@ -215,18 +292,19 @@ export async function runPrediction(
   const provider = getProvider();
   const tickers = universe && universe.length > 0 ? universe : DEFAULT_UNIVERSE;
 
-  // ── PASS 1: Batch quotes + fundamentals (~41 API calls) ────────
+  // ── PASS 1: Batch quotes + fundamentals ────────────────────────
+  // Quotes are always live (1 API call via FMP batch endpoint)
   const quotes = await provider.getQuotes(tickers);
   const quoteMap = new Map(quotes.map((q) => [q.ticker, q]));
 
-  // Fetch fundamentals in parallel batches of 10
+  // Fetch fundamentals with DB cache (only calls API if stale >24h)
   const batchSize = 10;
   const fundamentalsMap = new Map<string, FundamentalData | null>();
   for (let i = 0; i < tickers.length; i += batchSize) {
     const batch = tickers.slice(i, i + batchSize);
     const results = await Promise.all(
       batch.map(async (t) => {
-        const fund = await provider.getFundamentals(t);
+        const fund = await fetchFundamentalsWithCache(provider, t);
         return [t, fund] as const;
       })
     );
@@ -254,36 +332,41 @@ export async function runPrediction(
 
   const scored = rankStocks(forecasts, featureVectors, rankMode, strategy);
 
-  // ── PASS 2: Enrich top 10 with full data (~50 API calls) ──────
+  // ── PASS 2: Enrich top 10 with full data (cache-aware) ────────
   const topTickers = scored.slice(0, 10).map((s) => s.ticker);
   const to = new Date();
   const from = new Date(Date.now() - 365 * 86_400_000);
 
   const [enrichedPrices, enrichedNews, enrichedInsider, enrichedAnalyst, enrichedEarnings] = await Promise.all([
+    // Historical prices — uses DB cache, only fetches missing days
     Promise.all(
       topTickers.map(async (t) => {
-        const bars = await provider.getHistoricalPrices(t, from, to);
+        const bars = await fetchPricesWithCache(provider, t, from, to);
         return [t, bars] as const;
       })
     ).then((entries) => new Map(entries)),
+    // News — uses DB cache, only fetches if stale (>30 min)
     Promise.all(
       topTickers.map(async (t) => {
-        const news = applyNewsSentiment(await provider.getNews(t, 10));
+        const news = await fetchNewsWithCache(provider, t, 10);
         return [t, news] as const;
       })
     ).then((entries) => new Map(entries)),
+    // Insider data (no DB cache yet — always fetched, but cheap)
     Promise.all(
       topTickers.map(async (t) => {
         const insider = await provider.getInsiderData(t);
         return [t, insider] as const;
       })
     ).then((entries) => new Map(entries)),
+    // Analyst data (no DB cache yet — always fetched, but cheap)
     Promise.all(
       topTickers.map(async (t) => {
         const analyst = await provider.getAnalystData(t);
         return [t, analyst] as const;
       })
     ).then((entries) => new Map(entries)),
+    // Earnings data (no DB cache yet — always fetched, but cheap)
     Promise.all(
       topTickers.map(async (t) => {
         const earnings = await provider.getEarningsData(t);

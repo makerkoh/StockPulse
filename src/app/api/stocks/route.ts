@@ -2,6 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { getProvider } from "@/lib/providers/registry";
 import { buildFeatures } from "@/lib/services/features";
+import {
+  getCachedPrices, storePrices,
+  getCachedFundamentals, storeFundamentals,
+  getCachedNews, storeNews,
+} from "@/lib/services/data-cache";
 import type { Horizon, StockDetail, SentimentData, NewsItem } from "@/types";
 
 // Keyword-based sentiment (same as pipeline.ts — shared logic)
@@ -54,12 +59,35 @@ export async function GET(req: NextRequest) {
     const to = new Date();
     const from = new Date(Date.now() - 365 * 86_400_000);
 
-    // Fetch all data in parallel
+    // Fetch all data in parallel — using DB cache for prices, fundamentals, news
     const [quote, fundamentals, prices, rawNews, insider, analyst, earnings] = await Promise.all([
       provider.getQuote(ticker),
-      provider.getFundamentals(ticker),
-      provider.getHistoricalPrices(ticker, from, to),
-      provider.getNews(ticker, 8),
+      // Fundamentals: use DB cache (24h TTL)
+      getCachedFundamentals(ticker).then(async (cached) => {
+        if (cached) return cached;
+        const fresh = await provider.getFundamentals(ticker);
+        if (fresh) storeFundamentals(ticker, fresh).catch(() => {});
+        return fresh;
+      }),
+      // Prices: use DB cache, only fetch missing days
+      getCachedPrices(ticker, from, to).then(async ({ cached, fetchFrom }) => {
+        if (!fetchFrom) return cached;
+        const fresh = await provider.getHistoricalPrices(ticker, fetchFrom, to);
+        storePrices(ticker, fresh).catch(() => {});
+        const dateSet = new Set(cached.map((b) => b.date));
+        const merged = [...cached];
+        for (const bar of fresh) {
+          if (!dateSet.has(bar.date)) { merged.push(bar); dateSet.add(bar.date); }
+        }
+        return merged.sort((a, b) => a.date.localeCompare(b.date));
+      }),
+      // News: use DB cache (30min TTL)
+      getCachedNews(ticker, 8).then(async (cached) => {
+        if (cached) return cached;
+        const fresh = await provider.getNews(ticker, 8);
+        storeNews(ticker, fresh).catch(() => {});
+        return fresh;
+      }),
       provider.getInsiderData(ticker),
       provider.getAnalystData(ticker),
       provider.getEarningsData(ticker),
