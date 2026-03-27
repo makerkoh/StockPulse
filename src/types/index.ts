@@ -36,6 +36,22 @@ export const HORIZON_LABELS: Record<Horizon, string> = {
   "6M": "6 Months",
 };
 
+// ─── Strategy ↔ Horizon validation ──────────────────────────────────
+// Day traders hold minutes to hours — 1 month+ makes no sense.
+// Long-term investors hold months to years — 1 day makes no sense.
+export const VALID_HORIZONS: Record<Strategy, readonly Horizon[]> = {
+  day_trade:  ["1D", "1W"],                  // Intraday to ~1 week max
+  swing:      ["1W", "1M", "3M"],            // 1 week to 3 months
+  long_term:  ["1M", "3M", "6M"],            // 1 month to 6 months
+};
+
+// Default horizon per strategy
+export const DEFAULT_HORIZON: Record<Strategy, Horizon> = {
+  day_trade: "1D",
+  swing: "1W",
+  long_term: "3M",
+};
+
 // ─── Domain Types ────────────────────────────────────────────────────
 export interface StockQuote {
   ticker: string;

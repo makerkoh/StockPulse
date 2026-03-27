@@ -22,6 +22,12 @@ import { getProvider, isDemo } from "@/lib/providers/registry";
 import { DEFAULT_UNIVERSE } from "@/lib/providers/interfaces";
 import { buildFeatures } from "./features";
 import { rankStocks } from "./scoring";
+import {
+  getCachedPrices,
+  storePrices,
+  getCachedFundamentals,
+  storeFundamentals,
+} from "./data-cache";
 
 export interface BacktestConfig {
   horizon: Horizon;
@@ -104,7 +110,7 @@ export async function runRealBacktest(config: BacktestConfig): Promise<BacktestO
   const days = HORIZON_DAYS[horizon];
   const provider = getProvider();
 
-  // ── Step 1: Download historical prices (main API cost) ─────────
+  // ── Step 1: Download historical prices (uses DB cache) ──────────
   const to = new Date();
   const from = new Date(Date.now() - (lookbackMonths + 12) * 30 * 86_400_000); // Extra 12 months for feature lookback
 
@@ -115,8 +121,19 @@ export async function runRealBacktest(config: BacktestConfig): Promise<BacktestO
     const results = await Promise.all(
       batch.map(async (t) => {
         try {
-          const bars = await provider.getHistoricalPrices(t, from, to);
-          return [t, bars] as const;
+          // Use DB cache — only fetches missing days from API
+          const { cached, fetchFrom } = await getCachedPrices(t, from, to);
+          if (!fetchFrom) return [t, cached] as const;
+
+          const fresh = await provider.getHistoricalPrices(t, fetchFrom, to);
+          storePrices(t, fresh).catch(() => {});
+
+          const dateSet = new Set(cached.map((b) => b.date));
+          const merged = [...cached];
+          for (const bar of fresh) {
+            if (!dateSet.has(bar.date)) { merged.push(bar); dateSet.add(bar.date); }
+          }
+          return [t, merged.sort((a, b) => a.date.localeCompare(b.date))] as const;
         } catch {
           return [t, [] as PriceBar[]] as const;
         }
@@ -127,16 +144,18 @@ export async function runRealBacktest(config: BacktestConfig): Promise<BacktestO
     }
   }
 
-  // Also fetch current fundamentals (we'll use these as a rough proxy
-  // since fundamentals change slowly — this saves 40 calls per rebalance)
+  // Also fetch current fundamentals (uses DB cache — 24h TTL)
   const fundamentalsMap = new Map<string, FundamentalData | null>();
   for (let i = 0; i < tickers.length; i += batchSize) {
     const batch = tickers.slice(i, i + batchSize);
     const results = await Promise.all(
       batch.map(async (t) => {
         try {
-          const fund = await provider.getFundamentals(t);
-          return [t, fund] as const;
+          const cached = await getCachedFundamentals(t);
+          if (cached) return [t, cached] as const;
+          const fresh = await provider.getFundamentals(t);
+          if (fresh) storeFundamentals(t, fresh).catch(() => {});
+          return [t, fresh] as const;
         } catch {
           return [t, null] as const;
         }

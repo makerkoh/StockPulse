@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import type { BacktestResult, Horizon, RankMode, Strategy } from "@/types";
-import { HORIZONS, RANK_MODES, HORIZON_LABELS, RANK_MODE_LABELS, STRATEGIES, STRATEGY_LABELS } from "@/types";
+import { RANK_MODES, HORIZON_LABELS, RANK_MODE_LABELS, STRATEGIES, STRATEGY_LABELS, VALID_HORIZONS, DEFAULT_HORIZON } from "@/types";
 import { Button, Card, Select, Spinner, EmptyState, Badge } from "@/components/ui";
 import { formatPct, cn, signColor } from "@/lib/utils";
 import {
@@ -26,9 +26,19 @@ interface ExtendedBacktest extends BacktestResult {
 }
 
 export default function BacktestPage() {
-  const [horizon, setHorizon] = useState<Horizon>("1W");
-  const [rankMode, setRankMode] = useState<RankMode>("expected_return");
   const [strategy, setStrategy] = useState<Strategy>("swing");
+  const [horizon, setHorizon] = useState<Horizon>(DEFAULT_HORIZON["swing"]);
+  const [rankMode, setRankMode] = useState<RankMode>("expected_return");
+
+  const handleStrategyChange = (newStrategy: Strategy) => {
+    setStrategy(newStrategy);
+    const validHorizons = VALID_HORIZONS[newStrategy];
+    if (!validHorizons.includes(horizon)) {
+      setHorizon(DEFAULT_HORIZON[newStrategy]);
+    }
+  };
+
+  const availableHorizons = VALID_HORIZONS[strategy];
   const [data, setData] = useState<ExtendedBacktest | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -61,11 +71,11 @@ export default function BacktestPage() {
         </div>
         <div className="flex flex-wrap items-end gap-3">
           <Select label="Strategy" value={strategy}
-            onChange={(e) => setStrategy(e.target.value as Strategy)}
+            onChange={(e) => handleStrategyChange(e.target.value as Strategy)}
             options={STRATEGIES.map((s) => ({ value: s, label: STRATEGY_LABELS[s] }))} />
           <Select label="Horizon" value={horizon}
             onChange={(e) => setHorizon(e.target.value as Horizon)}
-            options={HORIZONS.map((h) => ({ value: h, label: HORIZON_LABELS[h] }))} />
+            options={availableHorizons.map((h) => ({ value: h, label: HORIZON_LABELS[h] }))} />
           <Select label="Ranking" value={rankMode}
             onChange={(e) => setRankMode(e.target.value as RankMode)}
             options={RANK_MODES.map((m) => ({ value: m, label: RANK_MODE_LABELS[m] }))} />
