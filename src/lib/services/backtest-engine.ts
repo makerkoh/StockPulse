@@ -118,7 +118,7 @@ export async function runRealBacktest(config: BacktestConfig): Promise<BacktestO
           const bars = await provider.getHistoricalPrices(t, from, to);
           return [t, bars] as const;
         } catch {
-          return [t, []] as const;
+          return [t, [] as PriceBar[]] as const;
         }
       })
     );
