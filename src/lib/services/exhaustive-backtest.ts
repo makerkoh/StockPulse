@@ -603,93 +603,55 @@ export interface AggregatedMetrics {
 }
 
 export async function getExhaustiveMetrics(runId: string): Promise<AggregatedMetrics[]> {
-  // Pull all results with actual outcomes
-  const results = await prisma.exhaustiveBacktestResult.findMany({
-    where: {
-      runId,
-      actualReturn: { not: null },
-    },
-    select: {
-      strategy: true,
-      horizon: true,
-      predictedReturn: true,
-      actualReturn: true,
-      rank: true,
-      withinInterval: true,
-      directionCorrect: true,
-    },
-  });
-
-  // Group by (strategy, horizon)
-  const groups = new Map<string, typeof results>();
-  for (const r of results) {
-    const key = `${r.strategy}||${r.horizon}`;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key)!.push(r);
-  }
-
-  const metrics: AggregatedMetrics[] = [];
-
-  for (const [key, rows] of groups) {
-    const [strategy, horizon] = key.split("||");
-    const n = rows.length;
-    if (n === 0) continue;
-
-    const withActual = rows.filter((r) => r.actualReturn != null);
-
-    const directionalAccuracy = withActual.filter((r) => r.directionCorrect).length / withActual.length;
-    const intervalCoverage = withActual.filter((r) => r.withinInterval).length / withActual.length;
-    const avgPredictedReturn = withActual.reduce((s, r) => s + r.predictedReturn, 0) / withActual.length;
-    const avgActualReturn = withActual.reduce((s, r) => s + r.actualReturn!, 0) / withActual.length;
-    const avgAbsError = withActual.reduce((s, r) => s + Math.abs(r.predictedReturn - r.actualReturn!), 0) / withActual.length;
-
-    // Group by prediction date for rank correlation and top-10 analysis
-    const byDate = new Map<string, typeof rows>();
-    // Need to re-query with predictionDate... for now use approximation from rank
-    const top10 = withActual.filter((r) => r.rank != null && r.rank <= 10);
-    const top10AvgReturn = top10.length > 0
-      ? top10.reduce((s, r) => s + r.actualReturn!, 0) / top10.length
-      : 0;
-    const universeAvgReturn = avgActualReturn;
-
-    // Spearman rank correlation (approximate: use predicted return rank vs actual return)
-    const sorted = [...withActual].sort((a, b) => b.predictedReturn - a.predictedReturn);
-    const n2 = sorted.length;
-    let d2Sum = 0;
-    const actualRanked = [...withActual].sort((a, b) => b.actualReturn! - a.actualReturn!);
-    const actualRankMap = new Map<number, number>();
-    actualRanked.forEach((r, i) => actualRankMap.set(actualRanked.indexOf(r), i + 1));
-    // Simpler: rank by predicted, rank by actual, compute Spearman
-    const predRanks = sorted.map((_, i) => i + 1);
-    const actRanks = sorted.map((r) => {
-      const idx = actualRanked.indexOf(r);
-      return idx + 1;
-    });
-    for (let i = 0; i < n2; i++) {
-      d2Sum += (predRanks[i] - actRanks[i]) ** 2;
-    }
-    const rankCorrelation = n2 > 2 ? 1 - (6 * d2Sum) / (n2 * (n2 * n2 - 1)) : 0;
-
-    metrics.push({
+  // Use raw SQL aggregation — much faster than pulling 1M+ rows into JS
+  const rows = await prisma.$queryRaw<{
+    strategy: string;
+    horizon: string;
+    total: bigint;
+    dir_correct: bigint;
+    in_interval: bigint;
+    avg_predicted: number;
+    avg_actual: number;
+    avg_abs_error: number;
+    top10_avg: number;
+    universe_avg: number;
+  }[]>`
+    WITH base AS (
+      SELECT strategy, horizon, "predictedReturn", "actualReturn", rank,
+             "withinInterval", "directionCorrect"
+      FROM "ExhaustiveBacktestResult"
+      WHERE "runId" = ${runId} AND "actualReturn" IS NOT NULL
+    )
+    SELECT
       strategy,
       horizon,
-      totalPredictions: n,
-      directionalAccuracy,
-      intervalCoverage,
-      avgPredictedReturn,
-      avgActualReturn,
-      avgAbsError,
-      rankCorrelation,
-      top10AvgReturn,
-      universeAvgReturn,
-      excessReturn: top10AvgReturn - universeAvgReturn,
-    });
-  }
+      COUNT(*)::bigint AS total,
+      COUNT(*) FILTER (WHERE "directionCorrect" = true)::bigint AS dir_correct,
+      COUNT(*) FILTER (WHERE "withinInterval" = true)::bigint AS in_interval,
+      AVG("predictedReturn")::float8 AS avg_predicted,
+      AVG("actualReturn")::float8 AS avg_actual,
+      AVG(ABS("predictedReturn" - "actualReturn"))::float8 AS avg_abs_error,
+      AVG("actualReturn") FILTER (WHERE rank <= 10)::float8 AS top10_avg,
+      AVG("actualReturn")::float8 AS universe_avg
+    FROM base
+    GROUP BY strategy, horizon
+    ORDER BY (AVG("actualReturn") FILTER (WHERE rank <= 10) - AVG("actualReturn")) DESC
+  `;
 
-  // Sort by excess return descending
-  metrics.sort((a, b) => b.excessReturn - a.excessReturn);
-
-  return metrics;
+  return rows.map((r) => ({
+    strategy: r.strategy,
+    horizon: r.horizon,
+    totalPredictions: Number(r.total),
+    directionalAccuracy: Number(r.total) > 0 ? Number(r.dir_correct) / Number(r.total) : 0,
+    intervalCoverage: Number(r.total) > 0 ? Number(r.in_interval) / Number(r.total) : 0,
+    avgPredictedReturn: r.avg_predicted ?? 0,
+    avgActualReturn: r.avg_actual ?? 0,
+    avgAbsError: r.avg_abs_error ?? 0,
+    rankCorrelation: 0, // Spearman requires per-day computation — skip for now
+    top10AvgReturn: r.top10_avg ?? 0,
+    universeAvgReturn: r.universe_avg ?? 0,
+    excessReturn: (r.top10_avg ?? 0) - (r.universe_avg ?? 0),
+  }));
 }
 
 // ─── Time Series for Charting ─────────────────────────────────────────
