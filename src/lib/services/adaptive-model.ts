@@ -168,6 +168,7 @@ export const ADAPTIVE_FEATURE_KEYS = [
   "z_pe", "z_dcf_upside", "z_roe",
   // Advanced momentum
   "momentum_quality", "momentum_accel", "vol_contraction",
+  "excess_momentum", "relative_strength",
   // Market-level aggregate
   "mkt_avg_momentum", "mkt_breadth", "mkt_dispersion", "mkt_avg_rsi", "mkt_avg_vol",
 ];

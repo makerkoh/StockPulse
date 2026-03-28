@@ -33,6 +33,7 @@ export const Z_SCORE_KEYS = [
   "insider_mspr",
   "bollinger_position", "year_position", "drawdown_from_high",
   "macd_histogram", "momentum_quality", "momentum_accel", "vol_contraction",
+  "excess_momentum", "relative_strength",
 ];
 
 // ─── Horizon-Adaptive Weight Profiles ───────────────────────────────
@@ -164,7 +165,7 @@ export function injectMarketSignals(
     ? volValues.reduce((a, b) => a + b, 0) / volValues.length
     : 0.25;
 
-  // Inject into every stock's feature vector
+  // Inject into every stock's feature vector + compute relative signals
   for (const ticker of tickers) {
     const fv = featureVectors.get(ticker)!;
     fv.features.mkt_avg_momentum = avgMom;
@@ -172,6 +173,16 @@ export function injectMarketSignals(
     fv.features.mkt_dispersion = momStd;
     fv.features.mkt_avg_rsi = avgRsi;
     fv.features.mkt_avg_vol = avgVol;
+
+    // Beta-adjusted excess return: stock return minus market average
+    // This isolates stock-specific alpha from market beta
+    const stockMom = fv.features.return_20d ?? 0;
+    fv.features.excess_momentum = stockMom - avgMom;
+
+    // Relative strength: how many std devs above/below market average
+    if (momStd > 0.001) {
+      fv.features.relative_strength = (stockMom - avgMom) / momStd;
+    }
   }
 }
 
@@ -350,20 +361,25 @@ export function generateForecast(
   }
   macroSignal *= sqrtDays / Math.sqrt(21) * w.macro;
 
-  // ─── SIGNAL 11: Market Regime ────────────────────────────────
-  // Use market-level signals to adjust predictions based on overall market state
+  // ─── SIGNAL 11: Market Regime + Relative Strength ───────────
   let marketRegimeSignal = 0;
   const mktBreadth = f.mkt_breadth ?? 0.5;
   const mktMom = f.mkt_avg_momentum ?? 0;
   const mktDispersion = f.mkt_dispersion ?? 0.03;
 
-  // In strong bull markets (breadth > 70%), lean bullish for all stocks
+  // In strong bull markets (breadth > 70%), lean bullish
   // In bear markets (breadth < 30%), lean bearish
   if (mktBreadth > 0.7) marketRegimeSignal += 0.005;
   else if (mktBreadth < 0.3) marketRegimeSignal -= 0.005;
 
-  // High dispersion = stock-picking matters more, amplify stock-specific signals
-  // Low dispersion = all stocks move together, reduce conviction
+  // Relative strength: stock's excess momentum over the market
+  // This is the KEY alpha signal — isolates stock-specific performance
+  const excessMom = f.excess_momentum ?? 0;
+  const relStrength = f.relative_strength ?? 0;
+  const relativeStrengthSignal = clamp(excessMom * 0.3, -0.02, 0.02) *
+    sqrtDays / Math.sqrt(20) * w.momentum;
+
+  // High dispersion = stock-picking matters more
   const dispersionMultiplier = mktDispersion > 0.05 ? 1.15 : mktDispersion < 0.02 ? 0.85 : 1.0;
 
   marketRegimeSignal *= sqrtDays / Math.sqrt(21);
@@ -471,6 +487,7 @@ export function generateForecast(
     earningsSignal +
     macroSignal +
     marketRegimeSignal +
+    relativeStrengthSignal +
     accelSignal +
     qualityBoost +
     alignmentSignal +
