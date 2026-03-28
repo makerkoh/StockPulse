@@ -4,27 +4,31 @@ export function cn(...classes: (string | boolean | undefined | null)[]): string 
   return classes.filter(Boolean).join(" ");
 }
 
-// Format number with commas
-export function formatNumber(n: number, decimals = 0): string {
+// Format number with commas (null-safe)
+export function formatNumber(n: number | null | undefined, decimals = 0): string {
+  if (n == null || isNaN(n)) return "—";
   return n.toLocaleString("en-US", {
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,
   });
 }
 
-// Format as currency
-export function formatCurrency(n: number, decimals = 2): string {
+// Format as currency (null-safe)
+export function formatCurrency(n: number | null | undefined, decimals = 2): string {
+  if (n == null || isNaN(n)) return "—";
   return "$" + formatNumber(n, decimals);
 }
 
-// Format percentage
-export function formatPct(n: number, decimals = 2): string {
+// Format percentage (null-safe)
+export function formatPct(n: number | null | undefined, decimals = 2): string {
+  if (n == null || isNaN(n)) return "—";
   const sign = n >= 0 ? "+" : "";
   return sign + n.toFixed(decimals) + "%";
 }
 
-// Format large numbers (1.2M, 3.4B, etc.)
-export function formatCompact(n: number): string {
+// Format large numbers (1.2M, 3.4B, etc.) (null-safe)
+export function formatCompact(n: number | null | undefined): string {
+  if (n == null || isNaN(n)) return "—";
   if (n >= 1e12) return (n / 1e12).toFixed(1) + "T";
   if (n >= 1e9) return (n / 1e9).toFixed(1) + "B";
   if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";

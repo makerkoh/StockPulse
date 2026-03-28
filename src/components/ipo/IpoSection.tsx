@@ -47,10 +47,10 @@ export default function IpoSection({ ipos }: IpoSectionProps) {
                 </p>
               </div>
               <span className="text-2xs text-text-tertiary whitespace-nowrap">
-                {new Date(ipo.expectedDate).toLocaleDateString("en-US", {
+                {ipo.expectedDate ? new Date(ipo.expectedDate).toLocaleDateString("en-US", {
                   month: "short",
                   day: "numeric",
-                })}
+                }) : "TBD"}
               </span>
             </div>
 

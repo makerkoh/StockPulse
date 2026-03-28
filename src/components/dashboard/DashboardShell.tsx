@@ -256,7 +256,7 @@ export default function DashboardShell() {
               {data.meta.isDemo ? "Demo" : "Live"}
             </span>
             <span className="text-2xs text-text-tertiary ml-1">
-              {new Date(data.meta.generatedAt).toLocaleTimeString()}
+              {data.meta.generatedAt ? new Date(data.meta.generatedAt).toLocaleTimeString() : ""}
             </span>
           </Card>
         </div>
