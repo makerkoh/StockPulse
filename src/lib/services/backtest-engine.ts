@@ -261,12 +261,12 @@ export async function runRealBacktest(config: BacktestConfig): Promise<BacktestO
     });
 
     // Get adaptive predictions (returns 0 if not enough training data)
-    const adaptiveScores = adaptivePredict(adaptiveTrainingData, currentFeatureRows, 5.0);
+    const adaptiveScores = adaptivePredict(adaptiveTrainingData, currentFeatureRows, 10.0);
 
     // Blend: boost the base forecast's expectedReturn with adaptive signal
     // This improves cross-sectional ranking without changing directional prediction
     for (let i = 0; i < forecasts.length; i++) {
-      const adaptiveBoost = adaptiveScores[i] * 0.4; // 40% weight to ML model (more data = more trust)
+      const adaptiveBoost = adaptiveScores[i] * 0.3; // 30% weight — 40% caused overfitting
       const baseForecast = forecasts[i];
       // Adjust expected return by blending
       const blendedReturn = baseForecast.expectedReturn + adaptiveBoost;
