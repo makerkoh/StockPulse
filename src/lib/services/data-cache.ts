@@ -8,11 +8,14 @@
  *   News          → refetch if older than 30 minutes
  */
 import { prisma } from "@/lib/prisma";
-import type { PriceBar, FundamentalData, NewsItem } from "@/types";
+import type { PriceBar, FundamentalData, NewsItem, InsiderData, AnalystData, EarningsData } from "@/types";
 
 // ─── Staleness thresholds ────────────────────────────────────────────
 const FUNDAMENTALS_TTL_MS = 24 * 60 * 60_000; // 24 hours
 const NEWS_TTL_MS = 30 * 60_000;               // 30 minutes
+const INSIDER_TTL_MS = 12 * 60 * 60_000;       // 12 hours
+const ANALYST_TTL_MS = 24 * 60 * 60_000;       // 24 hours
+const EARNINGS_TTL_MS = 24 * 60 * 60_000;      // 24 hours
 
 // ─── Helpers ─────────────────────────────────────────────────────────
 function toDateOnly(d: Date): string {
@@ -289,6 +292,187 @@ export async function storeNews(ticker: string, items: NewsItem[]): Promise<void
     }
   } catch (err) {
     console.error(`[data-cache] storeNews error for ${ticker}:`, err);
+  }
+}
+
+// ─── Insider Trading ──────────────────────────────────────────────────
+
+/** Returns cached insider data if still fresh, or null if stale/missing. */
+export async function getCachedInsider(ticker: string): Promise<InsiderData | null> {
+  try {
+    const stock = await prisma.stock.findUnique({ where: { ticker } });
+    if (!stock) return null;
+
+    const latest = await prisma.insiderTrade.findFirst({
+      where: { stockId: stock.id },
+      orderBy: { date: "desc" },
+    });
+
+    if (!latest) return null;
+    if (Date.now() - latest.fetchedAt.getTime() > INSIDER_TTL_MS) return null;
+
+    const totalTxns = latest.totalBuys + latest.totalSells;
+    return {
+      mspr: latest.mspr ?? 0,
+      totalBuys: latest.totalBuys,
+      totalSells: latest.totalSells,
+      netBuyValue: latest.netBuyValue,
+      clusterBuying: latest.clusterBuying,
+    };
+  } catch (err) {
+    console.error(`[data-cache] getCachedInsider error for ${ticker}:`, err);
+    return null;
+  }
+}
+
+/** Store insider trading snapshot. */
+export async function storeInsider(ticker: string, data: InsiderData): Promise<void> {
+  try {
+    const stockId = await ensureStock(ticker);
+    const date = new Date();
+    date.setHours(0, 0, 0, 0);
+
+    await prisma.insiderTrade.upsert({
+      where: { stockId_date: { stockId, date } },
+      update: {
+        mspr: data.mspr,
+        totalBuys: data.totalBuys,
+        totalSells: data.totalSells,
+        netBuyValue: data.netBuyValue,
+        clusterBuying: data.clusterBuying,
+        fetchedAt: new Date(),
+      },
+      create: {
+        stockId, date,
+        mspr: data.mspr,
+        totalBuys: data.totalBuys,
+        totalSells: data.totalSells,
+        netBuyValue: data.netBuyValue,
+        clusterBuying: data.clusterBuying,
+      },
+    });
+  } catch (err) {
+    console.error(`[data-cache] storeInsider error for ${ticker}:`, err);
+  }
+}
+
+// ─── Analyst Ratings ──────────────────────────────────────────────────
+
+/** Returns cached analyst data if still fresh, or null if stale/missing. */
+export async function getCachedAnalyst(ticker: string): Promise<AnalystData | null> {
+  try {
+    const stock = await prisma.stock.findUnique({ where: { ticker } });
+    if (!stock) return null;
+
+    const latest = await prisma.analystRating.findFirst({
+      where: { stockId: stock.id },
+      orderBy: { date: "desc" },
+    });
+
+    if (!latest) return null;
+    if (Date.now() - latest.fetchedAt.getTime() > ANALYST_TTL_MS) return null;
+
+    return {
+      targetPrice: latest.targetPrice,
+      strongBuy: latest.strongBuy,
+      buy: latest.buy,
+      hold: latest.hold,
+      sell: latest.sell,
+      strongSell: latest.strongSell,
+      consensusScore: latest.consensusScore ?? 0,
+    };
+  } catch (err) {
+    console.error(`[data-cache] getCachedAnalyst error for ${ticker}:`, err);
+    return null;
+  }
+}
+
+/** Store analyst rating snapshot. */
+export async function storeAnalyst(ticker: string, data: AnalystData): Promise<void> {
+  try {
+    const stockId = await ensureStock(ticker);
+    const date = new Date();
+    date.setHours(0, 0, 0, 0);
+
+    await prisma.analystRating.upsert({
+      where: { stockId_date: { stockId, date } },
+      update: {
+        targetPrice: data.targetPrice,
+        strongBuy: data.strongBuy,
+        buy: data.buy,
+        hold: data.hold,
+        sell: data.sell,
+        strongSell: data.strongSell,
+        consensusScore: data.consensusScore,
+        fetchedAt: new Date(),
+      },
+      create: {
+        stockId, date,
+        targetPrice: data.targetPrice,
+        strongBuy: data.strongBuy,
+        buy: data.buy,
+        hold: data.hold,
+        sell: data.sell,
+        strongSell: data.strongSell,
+        consensusScore: data.consensusScore,
+      },
+    });
+  } catch (err) {
+    console.error(`[data-cache] storeAnalyst error for ${ticker}:`, err);
+  }
+}
+
+// ─── Earnings ──────────────────────────────────────────────────────────
+
+/** Returns cached earnings data if still fresh, or null if stale/missing. */
+export async function getCachedEarnings(ticker: string): Promise<EarningsData | null> {
+  try {
+    const stock = await prisma.stock.findUnique({ where: { ticker } });
+    if (!stock) return null;
+
+    const latest = await prisma.earningsInfo.findFirst({
+      where: { stockId: stock.id },
+      orderBy: { date: "desc" },
+    });
+
+    if (!latest) return null;
+    if (Date.now() - latest.fetchedAt.getTime() > EARNINGS_TTL_MS) return null;
+
+    return {
+      daysUntilEarnings: latest.daysUntilEarnings,
+      lastSurprisePct: latest.lastSurprisePct,
+      lastBeatOrMiss: (latest.lastBeatOrMiss as "beat" | "miss" | "met" | null) ?? null,
+    };
+  } catch (err) {
+    console.error(`[data-cache] getCachedEarnings error for ${ticker}:`, err);
+    return null;
+  }
+}
+
+/** Store earnings data snapshot. */
+export async function storeEarnings(ticker: string, data: EarningsData): Promise<void> {
+  try {
+    const stockId = await ensureStock(ticker);
+    const date = new Date();
+    date.setHours(0, 0, 0, 0);
+
+    await prisma.earningsInfo.upsert({
+      where: { stockId_date: { stockId, date } },
+      update: {
+        daysUntilEarnings: data.daysUntilEarnings,
+        lastSurprisePct: data.lastSurprisePct,
+        lastBeatOrMiss: data.lastBeatOrMiss,
+        fetchedAt: new Date(),
+      },
+      create: {
+        stockId, date,
+        daysUntilEarnings: data.daysUntilEarnings,
+        lastSurprisePct: data.lastSurprisePct,
+        lastBeatOrMiss: data.lastBeatOrMiss,
+      },
+    });
+  } catch (err) {
+    console.error(`[data-cache] storeEarnings error for ${ticker}:`, err);
   }
 }
 

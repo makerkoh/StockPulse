@@ -36,11 +36,14 @@ model Stock {
   isActive    Boolean      @default(true)
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
-  prices      Price[]
-  fundamentals Fundamental[]
-  forecasts   Forecast[]
-  features    Feature[]
-  news        News[]
+  prices         Price[]
+  fundamentals   Fundamental[]
+  forecasts      Forecast[]
+  features       Feature[]
+  news           News[]
+  insiderTrades  InsiderTrade[]
+  analystRatings AnalystRating[]
+  earningsInfos  EarningsInfo[]
 
   @@index([sector])
   @@index([isActive])
@@ -178,6 +181,54 @@ model News {
 
   @@index([stockId, publishedAt])
   @@index([publishedAt])
+}
+
+model InsiderTrade {
+  id          String   @id @default(cuid())
+  stockId     String
+  stock       Stock    @relation(fields: [stockId], references: [id], onDelete: Cascade)
+  date        DateTime
+  mspr        Float?       // Monthly Share Purchase Ratio
+  totalBuys   Int          @default(0)
+  totalSells  Int          @default(0)
+  netBuyValue Float        @default(0)
+  clusterBuying Boolean    @default(false)
+  fetchedAt   DateTime     @default(now())
+
+  @@unique([stockId, date])
+  @@index([stockId, date])
+}
+
+model AnalystRating {
+  id              String   @id @default(cuid())
+  stockId         String
+  stock           Stock    @relation(fields: [stockId], references: [id], onDelete: Cascade)
+  date            DateTime
+  targetPrice     Float?
+  strongBuy       Int      @default(0)
+  buy             Int      @default(0)
+  hold            Int      @default(0)
+  sell            Int      @default(0)
+  strongSell      Int      @default(0)
+  consensusScore  Float?   // -1 to +1
+  fetchedAt       DateTime @default(now())
+
+  @@unique([stockId, date])
+  @@index([stockId, date])
+}
+
+model EarningsInfo {
+  id                  String   @id @default(cuid())
+  stockId             String
+  stock               Stock    @relation(fields: [stockId], references: [id], onDelete: Cascade)
+  date                DateTime
+  daysUntilEarnings   Int?
+  lastSurprisePct     Float?
+  lastBeatOrMiss      String?  // "beat", "miss", "met"
+  fetchedAt           DateTime @default(now())
+
+  @@unique([stockId, date])
+  @@index([stockId, date])
 }
 
 model Ipo {

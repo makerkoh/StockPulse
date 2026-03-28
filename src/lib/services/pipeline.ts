@@ -24,6 +24,12 @@ import {
   storeFundamentals,
   getCachedNews,
   storeNews,
+  getCachedInsider,
+  storeInsider,
+  getCachedAnalyst,
+  storeAnalyst,
+  getCachedEarnings,
+  storeEarnings,
 } from "./data-cache";
 
 // ─── Keyword-based sentiment scoring ────────────────────────────────
@@ -273,25 +279,34 @@ export async function runPrediction(
         return [t, news] as const;
       })
     ).then((entries) => new Map(entries)),
-    // Insider data (no DB cache yet — always fetched, but cheap)
+    // Insider data — DB cached (12h TTL), only fetches if stale
     Promise.all(
       topTickers.map(async (t) => {
-        const insider = await provider.getInsiderData(t);
-        return [t, insider] as const;
+        const cached = await getCachedInsider(t);
+        if (cached) return [t, cached] as const;
+        const fresh = await provider.getInsiderData(t);
+        if (fresh) storeInsider(t, fresh).catch(() => {});
+        return [t, fresh] as const;
       })
     ).then((entries) => new Map(entries)),
-    // Analyst data (no DB cache yet — always fetched, but cheap)
+    // Analyst data — DB cached (24h TTL), only fetches if stale
     Promise.all(
       topTickers.map(async (t) => {
-        const analyst = await provider.getAnalystData(t);
-        return [t, analyst] as const;
+        const cached = await getCachedAnalyst(t);
+        if (cached) return [t, cached] as const;
+        const fresh = await provider.getAnalystData(t);
+        if (fresh) storeAnalyst(t, fresh).catch(() => {});
+        return [t, fresh] as const;
       })
     ).then((entries) => new Map(entries)),
-    // Earnings data (no DB cache yet — always fetched, but cheap)
+    // Earnings data — DB cached (24h TTL), only fetches if stale
     Promise.all(
       topTickers.map(async (t) => {
-        const earnings = await provider.getEarningsData(t);
-        return [t, earnings] as const;
+        const cached = await getCachedEarnings(t);
+        if (cached) return [t, cached] as const;
+        const fresh = await provider.getEarningsData(t);
+        if (fresh) storeEarnings(t, fresh).catch(() => {});
+        return [t, fresh] as const;
       })
     ).then((entries) => new Map(entries)),
   ]);
