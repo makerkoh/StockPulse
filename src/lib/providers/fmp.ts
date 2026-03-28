@@ -6,7 +6,7 @@ import type {
   IpoEntry,
 } from "@/types";
 import type { MarketDataProvider, FundamentalProvider, IpoProvider } from "./interfaces";
-import { CachedFetcher, FMP_LIMITER, TTL } from "./rate-limiter";
+import { CachedFetcher, FMP_LIMITER, TTL, registerFetcher } from "./rate-limiter";
 
 const BASE_URL = "https://financialmodelingprep.com/api/v3";
 
@@ -18,6 +18,7 @@ export class FmpProvider implements MarketDataProvider, FundamentalProvider, Ipo
   constructor(apiKey: string) {
     this.apiKey = apiKey;
     this.fetcher = new CachedFetcher(FMP_LIMITER, TTL.FUNDAMENTALS);
+    registerFetcher("fmp", this.fetcher);
   }
 
   private url(path: string, params: Record<string, string> = {}): string {

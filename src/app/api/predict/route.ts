@@ -5,6 +5,7 @@ import { storePredictionRun } from "@/lib/services/persistence";
 import type { Horizon, RankMode, Strategy } from "@/types";
 import { HORIZONS, RANK_MODES, STRATEGIES, VALID_HORIZONS } from "@/types";
 import { DEFAULT_UNIVERSE, EXTENDED_UNIVERSE } from "@/lib/providers/interfaces";
+import { getApiLimitStatus } from "@/lib/providers/rate-limiter";
 
 export const maxDuration = 30;
 
@@ -56,7 +57,21 @@ export async function POST(req: NextRequest) {
     // Don't send featureVectors to client (large, not needed in UI)
     const { featureVectors: _fv, ...clientResult } = result;
 
-    return NextResponse.json({ data: clientResult });
+    // Check if any API limits were hit during this run
+    const apiStatus = getApiLimitStatus();
+
+    return NextResponse.json({
+      data: clientResult,
+      apiLimitWarning: apiStatus.fmpLimitReached || apiStatus.avLimitReached
+        ? {
+            message: apiStatus.fmpLimitReached
+              ? "FMP daily limit reached — predictions used Finnhub data + cached data only. Some fundamentals may be stale. Resets at midnight UTC."
+              : "Alpha Vantage daily limit reached — using locally computed technical indicators instead.",
+            fmpCalls: apiStatus.fmpCalls,
+            avCalls: apiStatus.avCalls,
+          }
+        : null,
+    });
   } catch (err) {
     console.error("Prediction error:", err);
     return NextResponse.json({ error: "Prediction failed" }, { status: 500 });

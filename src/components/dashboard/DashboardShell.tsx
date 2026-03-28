@@ -27,10 +27,12 @@ export default function DashboardShell() {
   const [data, setData] = useState<PredictionResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [apiWarning, setApiWarning] = useState<string | null>(null);
 
   const runPrediction = useCallback(async () => {
     setLoading(true);
     setError("");
+    setApiWarning(null);
     try {
       const res = await fetch("/api/predict", {
         method: "POST",
@@ -42,6 +44,9 @@ export default function DashboardShell() {
         setError(json.error);
       } else {
         setData(json.data);
+        if (json.apiLimitWarning) {
+          setApiWarning(json.apiLimitWarning.message);
+        }
       }
     } catch {
       setError("Failed to run prediction. Please try again.");
@@ -138,6 +143,16 @@ export default function DashboardShell() {
           </Button>
         </div>
       </div>
+
+      {/* API Limit Warning */}
+      {apiWarning && (
+        <div className="flex items-center gap-2 px-4 py-3 bg-warning/10 border border-warning/20 rounded-lg">
+          <svg className="w-4 h-4 text-warning shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <span className="text-sm text-warning">{apiWarning}</span>
+        </div>
+      )}
 
       {/* Error */}
       {error && (
