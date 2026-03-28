@@ -6,6 +6,7 @@ import {
   getExhaustiveTimeSeries,
   listExhaustiveRuns,
 } from "@/lib/services/exhaustive-backtest";
+import { prisma } from "@/lib/prisma";
 
 export const maxDuration = 60;
 
@@ -78,6 +79,39 @@ export async function GET(req: NextRequest) {
     }
   } catch (err) {
     console.error("[exhaustive-backtest] GET error:", err);
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      { status: 500 },
+    );
+  }
+}
+
+/**
+ * DELETE — Delete a run and all its results
+ * Body: { runId: string }
+ */
+export async function DELETE(req: NextRequest) {
+  const session = await getSession();
+  if (!session.isLoggedIn) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  try {
+    const body = await req.json();
+    const runId = body.runId;
+    if (!runId) return NextResponse.json({ error: "runId required" }, { status: 400 });
+
+    // Delete results first (cascade should handle this, but be explicit)
+    const deleted = await prisma.exhaustiveBacktestResult.deleteMany({
+      where: { runId },
+    });
+    await prisma.exhaustiveBacktestRun.delete({
+      where: { id: runId },
+    });
+
+    return NextResponse.json({ data: { deleted: deleted.count, runId } });
+  } catch (err) {
+    console.error("[exhaustive-backtest] DELETE error:", err);
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Unknown error" },
       { status: 500 },
