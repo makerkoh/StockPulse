@@ -108,7 +108,21 @@ export function scoreStock(
       breakdown.liquidity = liquidityScore;
       breakdown.analyst = analystBonus;
       breakdown.earnings = earningsRaw;
-      score = ret * 200 + conf * 15 + Math.min(forecast.riskReward, 3) * 5 +
+
+      // Z-score cross-sectional signals for better ranking
+      const zMom = (f.z_return_20d ?? 0) * 3 * w.momentum;
+      const zSent = (f.z_avg_sentiment ?? 0) * 2 * w.sentiment;
+      const zInsider = (f.z_insider_mspr ?? 0) * 3 * w.insider;
+      const zAnalyst = (f.z_analyst_consensus ?? 0) * 2 * w.fundamentals;
+      const zTarget = (f.z_target_upside ?? 0) * 2 * w.fundamentals;
+      const zDcf = (f.z_dcf_upside ?? 0) * 2 * w.fundamentals;
+      const zScoreComponent = zMom + zSent + zInsider + zAnalyst + zTarget + zDcf;
+      breakdown.z_score = zScoreComponent;
+
+      // Blend forecast return with z-score ranking
+      // ret * 120 (reduced from 200) + z-scores for cross-sectional accuracy
+      score = ret * 120 + conf * 15 + Math.min(forecast.riskReward, 3) * 5 +
+        zScoreComponent +
         sentimentBonus + insiderBonus + analystBonus + earningsRaw + volScore + liquidityScore;
       break;
     }
