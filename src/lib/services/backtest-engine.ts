@@ -109,7 +109,10 @@ export async function runRealBacktest(config: BacktestConfig): Promise<BacktestO
 
   // ── Step 1: Download historical prices (uses DB cache) ──────────
   const to = new Date();
-  const from = new Date(Date.now() - (lookbackMonths + 12) * 30 * 86_400_000); // Extra 12 months for feature lookback
+  // Need extra history for: 252 days feature lookback + lookback period + buffer
+  // For long horizons (3M/6M), we need significantly more history
+  const extraMonths = Math.max(18, Math.ceil(days / 21) * 3); // At least 18mo, more for long horizons
+  const from = new Date(Date.now() - (lookbackMonths + extraMonths) * 30 * 86_400_000);
 
   const priceMap = new Map<string, PriceBar[]>();
   const batchSize = 10;
@@ -185,8 +188,8 @@ export async function runRealBacktest(config: BacktestConfig): Promise<BacktestO
   const maxRebalances = Math.floor(lookbackMonths * 21 / days); // ~21 trading days/month
   const selectedRebalances = rebalanceDates.slice(-maxRebalances);
 
-  if (selectedRebalances.length < 3) {
-    throw new Error("Not enough history for meaningful backtest. Need at least 3 rebalance periods.");
+  if (selectedRebalances.length < 2) {
+    throw new Error(`Not enough history for meaningful backtest. Need at least 2 rebalance periods (have ${selectedRebalances.length}). Try a shorter horizon or longer lookback.`);
   }
 
   // ── Step 3: Walk-forward simulation ────────────────────────────
