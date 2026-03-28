@@ -314,3 +314,49 @@ model AuditLog {
   @@index([action])
   @@index([createdAt])
 }
+
+// ─── Exhaustive Walk-Forward Backtest ─────────────────────────────────
+// One row per (date, ticker, strategy, horizon) prediction.
+// Every trading day in the window gets a full prediction run using
+// ONLY data available on that day — then compared to actual outcome.
+
+model ExhaustiveBacktestRun {
+  id           String   @id @default(cuid())
+  startedAt    DateTime @default(now())
+  completedAt  DateTime?
+  status       String   @default("running") // running | completed | failed
+  universe     String[]
+  lookbackYears Int     @default(5)
+  totalDays    Int      @default(0)
+  processedDays Int     @default(0)
+  lastProcessedDate String?
+  results      ExhaustiveBacktestResult[]
+
+  @@index([status])
+}
+
+model ExhaustiveBacktestResult {
+  id              String   @id @default(cuid())
+  runId           String
+  run             ExhaustiveBacktestRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  predictionDate  String   // Date the prediction was made (YYYY-MM-DD)
+  ticker          String
+  strategy        String   // day_trade | swing | long_term
+  horizon         String   // 1D | 1W | 1M | 3M | 6M
+  currentPrice    Float    // Price on prediction date
+  predictedReturn Float    // Model's expected return
+  pLow            Float    // P10 price
+  pMid            Float    // P50 price
+  pHigh           Float    // P90 price
+  actualPrice     Float?   // Actual price at evaluation date (null if future)
+  actualReturn    Float?   // Actual return (null if future)
+  evaluationDate  String?  // Date the actual outcome was measured
+  rank            Int?     // Rank within universe on that day for this combo
+  withinInterval  Boolean? // Was actual within [P10, P90]?
+  directionCorrect Boolean? // Did we predict the right direction?
+
+  @@unique([runId, predictionDate, ticker, strategy, horizon])
+  @@index([runId, predictionDate])
+  @@index([runId, strategy, horizon])
+  @@index([runId, ticker])
+}
