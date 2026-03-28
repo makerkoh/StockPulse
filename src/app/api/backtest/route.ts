@@ -30,7 +30,7 @@ export async function POST(req: NextRequest) {
       rankMode,
       strategy,
       topN: body.topN || 5,
-      lookbackMonths: body.lookbackMonths || 6,
+      lookbackMonths: body.lookbackMonths || 18,
       transactionCostBps: body.transactionCostBps || 10,
     };
 
