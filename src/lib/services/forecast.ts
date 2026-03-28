@@ -117,6 +117,64 @@ export function crossSectionalZScore(
   }
 }
 
+// ─── Market-Level Aggregate Signals ─────────────────────────────────
+/**
+ * Compute market-wide signals from the universe and inject them into each
+ * stock's feature vector. These provide context about overall market regime.
+ *
+ * Signals computed:
+ *   - mkt_avg_momentum: average 20-day return across universe
+ *   - mkt_breadth: % of stocks with positive 20-day return
+ *   - mkt_dispersion: std dev of 20-day returns (high = stock-picking matters)
+ *   - mkt_avg_rsi: average RSI (overbought/oversold market-wide)
+ *   - mkt_avg_vol: average 20-day volatility
+ */
+export function injectMarketSignals(
+  featureVectors: Map<string, FeatureVector>,
+): void {
+  const tickers = [...featureVectors.keys()];
+  if (tickers.length < 5) return;
+
+  // Collect momentum and RSI across universe
+  const momValues: number[] = [];
+  const rsiValues: number[] = [];
+  const volValues: number[] = [];
+
+  for (const ticker of tickers) {
+    const f = featureVectors.get(ticker)!.features;
+    const mom = f.return_20d;
+    if (mom != null && isFinite(mom)) momValues.push(mom);
+    const rsi = f.rsi_14 ?? f.av_rsi_14;
+    if (rsi != null && isFinite(rsi)) rsiValues.push(rsi);
+    const vol = f.volatility_20d;
+    if (vol != null && isFinite(vol) && vol > 0) volValues.push(vol);
+  }
+
+  if (momValues.length < 5) return;
+
+  const avgMom = momValues.reduce((a, b) => a + b, 0) / momValues.length;
+  const breadth = momValues.filter((m) => m > 0).length / momValues.length;
+  const momStd = Math.sqrt(
+    momValues.reduce((a, b) => a + (b - avgMom) ** 2, 0) / momValues.length
+  );
+  const avgRsi = rsiValues.length > 0
+    ? rsiValues.reduce((a, b) => a + b, 0) / rsiValues.length
+    : 50;
+  const avgVol = volValues.length > 0
+    ? volValues.reduce((a, b) => a + b, 0) / volValues.length
+    : 0.25;
+
+  // Inject into every stock's feature vector
+  for (const ticker of tickers) {
+    const fv = featureVectors.get(ticker)!;
+    fv.features.mkt_avg_momentum = avgMom;
+    fv.features.mkt_breadth = breadth;
+    fv.features.mkt_dispersion = momStd;
+    fv.features.mkt_avg_rsi = avgRsi;
+    fv.features.mkt_avg_vol = avgVol;
+  }
+}
+
 // ─── Helper: clamp a value ──────────────────────────────────────────
 function clamp(val: number, min: number, max: number): number {
   return Math.min(Math.max(val, min), max);
@@ -292,7 +350,25 @@ export function generateForecast(
   }
   macroSignal *= sqrtDays / Math.sqrt(21) * w.macro;
 
-  // ─── SIGNAL 11: Momentum Acceleration (2nd derivative) ──────
+  // ─── SIGNAL 11: Market Regime ────────────────────────────────
+  // Use market-level signals to adjust predictions based on overall market state
+  let marketRegimeSignal = 0;
+  const mktBreadth = f.mkt_breadth ?? 0.5;
+  const mktMom = f.mkt_avg_momentum ?? 0;
+  const mktDispersion = f.mkt_dispersion ?? 0.03;
+
+  // In strong bull markets (breadth > 70%), lean bullish for all stocks
+  // In bear markets (breadth < 30%), lean bearish
+  if (mktBreadth > 0.7) marketRegimeSignal += 0.005;
+  else if (mktBreadth < 0.3) marketRegimeSignal -= 0.005;
+
+  // High dispersion = stock-picking matters more, amplify stock-specific signals
+  // Low dispersion = all stocks move together, reduce conviction
+  const dispersionMultiplier = mktDispersion > 0.05 ? 1.15 : mktDispersion < 0.02 ? 0.85 : 1.0;
+
+  marketRegimeSignal *= sqrtDays / Math.sqrt(21);
+
+  // ─── SIGNAL 12: Momentum Acceleration (2nd derivative) ──────
   // Is momentum speeding up or slowing down?
   const ret5d = f.return_5d || 0;
   const ret20d = f.return_20d || 0;
@@ -377,6 +453,7 @@ export function generateForecast(
   ) * sqrtDays / Math.sqrt(5);
 
   // ─── COMPOSITE: Expected period return ───────────────────────
+  // Sum all signals, apply market dispersion multiplier and trend strength
   const rawReturn = (
     momentumSignal +
     meanReversionSignal +
@@ -388,13 +465,14 @@ export function generateForecast(
     insiderSignal +
     earningsSignal +
     macroSignal +
+    marketRegimeSignal +
     accelSignal +
     alignmentSignal +
     rsiExtremeSignal +
     confluenceSignal +
     volBreakoutSignal +
     zScoreBoost
-  );
+  ) * dispersionMultiplier;
 
   // Cap to prevent unrealistic predictions
   const maxRet = MAX_PERIOD_RETURN[horizon];

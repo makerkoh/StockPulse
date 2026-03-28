@@ -16,7 +16,7 @@ import { getProvider, isDemo } from "@/lib/providers/registry";
 import { DEFAULT_UNIVERSE } from "@/lib/providers/interfaces";
 import { buildFeatures } from "./features";
 import { rankStocks } from "./scoring";
-import { generateForecast, crossSectionalZScore } from "./forecast";
+import { generateForecast, crossSectionalZScore, injectMarketSignals } from "./forecast";
 import {
   getCachedPrices,
   storePrices,
@@ -246,7 +246,8 @@ export async function runPrediction(
     );
   }
 
-  // Cross-sectional z-score normalization (Pass 1)
+  // Market-level signals + cross-sectional z-score normalization (Pass 1)
+  injectMarketSignals(featureVectors);
   crossSectionalZScore(featureVectors);
 
   // Generate initial forecasts and rank
@@ -328,7 +329,8 @@ export async function runPrediction(
     }
   }
 
-  // Cross-sectional z-score normalization (Pass 2 — with enriched features)
+  // Market-level signals + cross-sectional z-score normalization (Pass 2)
+  injectMarketSignals(featureVectors);
   crossSectionalZScore(featureVectors);
 
   // Re-generate forecasts and GLOBALLY re-rank

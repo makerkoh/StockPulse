@@ -19,10 +19,11 @@ import type {
   ScoredStock,
 } from "@/types";
 import { getProvider, isDemo } from "@/lib/providers/registry";
-import { DEFAULT_UNIVERSE } from "@/lib/providers/interfaces";
+import { DEFAULT_UNIVERSE, EXTENDED_UNIVERSE } from "@/lib/providers/interfaces";
 import { buildFeatures } from "./features";
 import { rankStocks } from "./scoring";
-import { generateForecast, crossSectionalZScore, HORIZON_DAYS } from "./forecast";
+import { generateForecast, crossSectionalZScore, injectMarketSignals, HORIZON_DAYS } from "./forecast";
+import { extractFeatureRow, adaptivePredict, ADAPTIVE_FEATURE_KEYS } from "./adaptive-model";
 import {
   getCachedPrices,
   storePrices,
@@ -103,7 +104,8 @@ export async function runRealBacktest(config: BacktestConfig): Promise<BacktestO
     transactionCostBps = 10,
   } = config;
 
-  const tickers = config.universe || DEFAULT_UNIVERSE;
+  // Use extended universe (89 stocks) by default for more robust backtesting
+  const tickers = config.universe || EXTENDED_UNIVERSE;
   const days = HORIZON_DAYS[horizon];
   const provider = getProvider();
 
@@ -197,6 +199,10 @@ export async function runRealBacktest(config: BacktestConfig): Promise<BacktestO
   const txCost = transactionCostBps / 10000;
   let prevHoldings: string[] = [];
 
+  // Adaptive model: accumulate (features, actual_return) training data
+  // from past periods to train ridge regression for better ranking
+  const adaptiveTrainingData: { features: number[]; actualReturn: number }[] = [];
+
   for (const dateIdx of selectedRebalances) {
     const rebalanceDate = sortedDates[dateIdx];
     const evaluationDate = sortedDates[Math.min(dateIdx + days, sortedDates.length - 1)];
@@ -230,7 +236,8 @@ export async function runRealBacktest(config: BacktestConfig): Promise<BacktestO
       featureVectors.set(ticker, fv);
     }
 
-    // Cross-sectional z-score normalization (same as pipeline)
+    // Market-level aggregate signals + cross-sectional z-score normalization
+    injectMarketSignals(featureVectors);
     crossSectionalZScore(featureVectors);
 
     // Generate forecasts using shared forecast module (single source of truth)
@@ -244,7 +251,28 @@ export async function runRealBacktest(config: BacktestConfig): Promise<BacktestO
 
     if (forecasts.length < 5) continue;
 
-    // Rank
+    // ── Adaptive ML: blend learned scores with base model ────────
+    // Extract feature rows for current stocks
+    const currentTickers = forecasts.map((f) => f.ticker);
+    const currentFeatureRows = currentTickers.map((t) => {
+      const fv = featureVectors.get(t);
+      return fv ? extractFeatureRow(fv.features) : Array(ADAPTIVE_FEATURE_KEYS.length).fill(0);
+    });
+
+    // Get adaptive predictions (returns 0 if not enough training data)
+    const adaptiveScores = adaptivePredict(adaptiveTrainingData, currentFeatureRows, 10.0);
+
+    // Blend: boost the base forecast's expectedReturn with adaptive signal
+    // This improves cross-sectional ranking without changing directional prediction
+    for (let i = 0; i < forecasts.length; i++) {
+      const adaptiveBoost = adaptiveScores[i] * 0.3; // 30% weight to ML model
+      const baseForecast = forecasts[i];
+      // Adjust expected return by blending
+      const blendedReturn = baseForecast.expectedReturn + adaptiveBoost;
+      (forecasts[i] as { expectedReturn: number }).expectedReturn = +blendedReturn.toFixed(4);
+    }
+
+    // Rank (now using blended forecasts)
     const ranked = rankStocks(forecasts, featureVectors, rankMode, strategy);
 
     // Pick top N
@@ -305,6 +333,22 @@ export async function runRealBacktest(config: BacktestConfig): Promise<BacktestO
       benchmarkReturn,
       predictions,
     });
+
+    // ── Collect training data for adaptive model ──────────────
+    // Add (features, actual_return) pairs from ALL stocks this period
+    // so the model can learn which features predict returns
+    for (const ticker of activeTickers) {
+      const fv = featureVectors.get(ticker);
+      const entry = priceAtRebalance.get(ticker);
+      const exit = priceAtEvaluation.get(ticker);
+      if (fv && entry && exit && entry > 0) {
+        const actualReturn = (exit - entry) / entry;
+        adaptiveTrainingData.push({
+          features: extractFeatureRow(fv.features),
+          actualReturn,
+        });
+      }
+    }
 
     prevHoldings = holdings;
   }
