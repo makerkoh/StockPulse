@@ -1,20 +1,19 @@
 /**
- * Shared Forecast Generation Module
+ * Shared Forecast Generation Module — v2
  *
  * Single source of truth for generating quantile forecasts.
  * Used by both pipeline.ts (live predictions) and backtest-engine.ts (validation).
  *
- * Signal architecture:
- *   1. Momentum (multi-horizon, sqrt-scaled)
- *   2. Mean reversion (regime-aware)
- *   3. RSI (contrarian oscillator)
- *   4. Trend (continuous SMA-based)
- *   5. Value / Fundamentals (PE, DCF, PB)
- *   6. Sentiment & News
- *   7. Analyst consensus & price targets
- *   8. Insider trading
- *   9. Earnings momentum
- *  10. Macro environment
+ * v2 improvements over v1:
+ *   - Horizon-adaptive signal weights (short-term = technicals, long-term = fundamentals)
+ *   - Volume-confirmed momentum (strong volume = amplified signal)
+ *   - MACD histogram as trend confirmation
+ *   - Bollinger band position for short-term mean reversion
+ *   - 52-week position and drawdown signals
+ *   - Revenue/earnings growth signals
+ *   - Multiple SMA trend signals (SMA20, SMA50, SMA200)
+ *   - Signal magnitude cap to prevent unrealistic predictions
+ *   - Better calibrated signal coefficients
  */
 
 import type { Horizon, QuantileForecast, FeatureVector } from "@/types";
@@ -28,29 +27,76 @@ export const HORIZON_DAYS: Record<Horizon, number> = {
 export const Z_SCORE_KEYS = [
   "return_5d", "return_20d", "return_60d",
   "rsi_14", "volatility_20d", "mean_reversion_z",
-  "pe", "pb", "dcf_upside", "roe", "revenue_growth",
+  "pe", "pb", "dcf_upside", "roe", "revenue_growth", "earnings_growth",
   "avg_sentiment", "volume_ratio",
   "analyst_consensus", "target_upside",
   "insider_mspr",
+  "bollinger_position", "year_position", "drawdown_from_high",
+  "macd_histogram",
 ];
 
+// ─── Horizon-Adaptive Weight Profiles ───────────────────────────────
+// Short-term forecasts should rely on technicals/momentum.
+// Long-term forecasts should rely on fundamentals/value/insider.
+interface HorizonWeights {
+  momentum: number;
+  meanReversion: number;
+  technicals: number;      // RSI, MACD, Bollinger
+  trend: number;           // SMA-based
+  value: number;           // PE, DCF, growth
+  sentiment: number;
+  analyst: number;
+  insider: number;
+  earnings: number;
+  macro: number;
+}
+
+const HORIZON_WEIGHTS: Record<Horizon, HorizonWeights> = {
+  "1D": {
+    momentum: 1.8, meanReversion: 0.8, technicals: 1.5, trend: 0.8,
+    value: 0.05, sentiment: 0.6, analyst: 0.05, insider: 0.05,
+    earnings: 0.3, macro: 0.0,
+  },
+  "1W": {
+    momentum: 1.5, meanReversion: 0.6, technicals: 1.2, trend: 1.0,
+    value: 0.2, sentiment: 0.8, analyst: 0.2, insider: 0.3,
+    earnings: 0.5, macro: 0.1,
+  },
+  "1M": {
+    momentum: 1.0, meanReversion: 0.4, technicals: 0.8, trend: 1.0,
+    value: 1.0, sentiment: 0.6, analyst: 0.8, insider: 1.0,
+    earnings: 0.6, macro: 0.3,
+  },
+  "3M": {
+    momentum: 0.5, meanReversion: 0.2, technicals: 0.3, trend: 0.8,
+    value: 1.5, sentiment: 0.3, analyst: 1.2, insider: 1.5,
+    earnings: 0.5, macro: 0.5,
+  },
+  "6M": {
+    momentum: 0.3, meanReversion: 0.1, technicals: 0.2, trend: 0.6,
+    value: 1.8, sentiment: 0.2, analyst: 1.5, insider: 1.8,
+    earnings: 0.4, macro: 0.6,
+  },
+};
+
+// Max expected return per horizon (cap to prevent unrealistic predictions)
+const MAX_PERIOD_RETURN: Record<Horizon, number> = {
+  "1D": 0.03,   // ±3% max for a single day
+  "1W": 0.08,   // ±8% max for a week
+  "1M": 0.15,   // ±15% max for a month
+  "3M": 0.25,   // ±25% max for 3 months
+  "6M": 0.40,   // ±40% max for 6 months
+};
+
 // ─── Cross-Sectional Z-Score Normalization ──────────────────────────
-/**
- * For each feature key, compute mean/std across all tickers in the universe,
- * then add a `z_{key}` feature with the winsorized z-score (±3).
- *
- * This ensures ranking reflects RELATIVE position, not absolute scale.
- * e.g., a PE of 15 means nothing alone — but being 2σ below universe mean does.
- */
 export function crossSectionalZScore(
   featureVectors: Map<string, FeatureVector>,
   keysToNormalize: string[] = Z_SCORE_KEYS,
 ): void {
   const tickers = [...featureVectors.keys()];
-  if (tickers.length < 5) return; // Need a minimum universe
+  if (tickers.length < 5) return;
 
   for (const key of keysToNormalize) {
-    // Collect non-null, finite values
     const vals: { ticker: string; val: number }[] = [];
     for (const ticker of tickers) {
       const fv = featureVectors.get(ticker)!;
@@ -64,7 +110,6 @@ export function crossSectionalZScore(
     const std = Math.sqrt(variance);
     if (std < 1e-10) continue;
 
-    // Write z-score (winsorized at ±3) as z_{key}
     for (const { ticker, val } of vals) {
       const fv = featureVectors.get(ticker)!;
       fv.features[`z_${key}`] = Math.max(-3, Math.min(3, (val - mean) / std));
@@ -72,17 +117,12 @@ export function crossSectionalZScore(
   }
 }
 
-// ─── Forecast Generation ────────────────────────────────────────────
-/**
- * Generate a quantile forecast for a single stock.
- *
- * Key design principles:
- *   - Momentum returns are PERIOD returns, not annualized → no `* (days/252)` scaling
- *   - Each signal is independently scaled to the forecast horizon via sqrt(time)
- *   - No systematic bias (removed golden cross penalty)
- *   - Confidence based on signal-to-noise, not just volatility
- *   - All available data sources contribute to the composite signal
- */
+// ─── Helper: clamp a value ──────────────────────────────────────────
+function clamp(val: number, min: number, max: number): number {
+  return Math.min(Math.max(val, min), max);
+}
+
+// ─── Forecast Generation v2 ─────────────────────────────────────────
 export function generateForecast(
   ticker: string,
   name: string,
@@ -93,149 +133,219 @@ export function generateForecast(
 ): QuantileForecast {
   const f = features.features;
   const days = HORIZON_DAYS[horizon];
+  const w = HORIZON_WEIGHTS[horizon];
+  const sqrtDays = Math.sqrt(days);
 
-  // ─── SIGNAL 1: Momentum (properly scaled) ────────────────────
-  // return_Xd are fractional period returns (e.g., 0.05 = +5%).
-  // Scale to forecast horizon via sqrt(time) ratio.
-  const mom5d  = (f.return_5d  || 0) * Math.sqrt(days / 5)  * 0.25;
-  const mom20d = (f.return_20d || 0) * Math.sqrt(days / 20) * 0.50;
-  const mom60d = (f.return_60d || 0) * Math.sqrt(days / 60) * 0.25;
-  const momentumSignal = mom5d + mom20d + mom60d;
+  // ─── SIGNAL 1: Momentum (multi-horizon, volume-confirmed) ────
+  const mom5d  = (f.return_5d  || 0) * Math.sqrt(days / 5);
+  const mom20d = (f.return_20d || 0) * Math.sqrt(days / 20);
+  const mom60d = (f.return_60d || 0) * Math.sqrt(days / 60);
+  const rawMomentum = mom5d * 0.25 + mom20d * 0.50 + mom60d * 0.25;
+
+  // Volume confirmation: strong volume amplifies momentum, weak dampens it
+  const volRatio = f.volume_ratio ?? 1.0;
+  const volumeMultiplier = volRatio > 1.5 ? 1.3 : volRatio < 0.5 ? 0.7 : 1.0;
+  const momentumSignal = rawMomentum * volumeMultiplier * w.momentum;
 
   // ─── SIGNAL 2: Mean Reversion (regime-aware) ─────────────────
-  // Only apply strongly when momentum is weak (sideways market).
-  // When trending, reduce MRZ to avoid fighting the trend.
   const mrzRaw = f.mean_reversion_z ?? 0;
   const absMomentum = Math.abs(f.return_20d || 0);
-  const mrzWeight = absMomentum < 0.03 ? 1.0 : 0.2; // Reduce when trending
-  const meanReversionSignal = -mrzRaw * 0.01 * Math.sqrt(days / 21) * mrzWeight;
+  const mrzWeight = absMomentum < 0.03 ? 1.0 : absMomentum < 0.08 ? 0.3 : 0.1;
+  const meanReversionSignal = -mrzRaw * 0.008 * sqrtDays / Math.sqrt(21) * mrzWeight * w.meanReversion;
 
-  // ─── SIGNAL 3: RSI (contrarian oscillator) ───────────────────
-  // RSI 30 → bullish (+1% signal), RSI 70 → bearish (-1% signal)
+  // ─── SIGNAL 3: Technicals (RSI + MACD + Bollinger) ───────────
+  // RSI
   const rsiVal = f.av_rsi_14 ?? f.rsi_14 ?? 50;
-  const rsiSignal = ((50 - rsiVal) / 100) * 0.05 * Math.sqrt(days / 5);
+  const rsiSignal = ((50 - rsiVal) / 100) * 0.04 * sqrtDays / Math.sqrt(5);
 
-  // ─── SIGNAL 4: Trend (continuous, no bias) ───────────────────
-  // Use price vs SMA50 — positive when above, negative when below.
-  // Replaced golden_cross penalty which created systematic bearish bias.
-  const trendSignal = (f.price_vs_sma50 ?? 0) * 0.15 * Math.sqrt(days / 21);
+  // MACD histogram — positive = bullish trend accelerating
+  const macdHist = f.macd_histogram ?? f.av_macd_hist ?? 0;
+  const macdSignal = macdHist > 0
+    ? Math.min(macdHist / currentPrice * 100, 0.02) * sqrtDays / Math.sqrt(5)
+    : Math.max(macdHist / currentPrice * 100, -0.02) * sqrtDays / Math.sqrt(5);
+
+  // Bollinger position (0=at lower band, 1=at upper band, 0.5=at mean)
+  // For short-term: overbought (>0.9) is bearish, oversold (<0.1) is bullish
+  const bollPos = f.bollinger_position ?? 0.5;
+  const bollingerSignal = (0.5 - bollPos) * 0.03 * sqrtDays / Math.sqrt(5);
+
+  const technicalsSignal = (rsiSignal + macdSignal + bollingerSignal) * w.technicals;
+
+  // ─── SIGNAL 4: Trend (multi-SMA) ────────────────────────────
+  const trendSMA20 = (f.price_vs_sma20 ?? 0) * 0.08;
+  const trendSMA50 = (f.price_vs_sma50 ?? 0) * 0.12;
+  const trendSMA200 = (f.price_vs_sma200 ?? 0) * 0.05;
+
+  // 52-week position: above 0.8 = near highs (bullish), below 0.2 = near lows (caution)
+  const yearPos = f.year_position ?? 0.5;
+  const yearPosSignal = (yearPos - 0.5) * 0.02;
+
+  // Drawdown signal: big drawdown = potential bounce (but risky)
+  const drawdown = f.drawdown_from_high ?? 0;
+  const drawdownSignal = drawdown < -0.20 ? -drawdown * 0.05 : 0; // Bounce from >20% drawdown
+
+  const trendSignal = (trendSMA20 + trendSMA50 + trendSMA200 + yearPosSignal + drawdownSignal)
+    * sqrtDays / Math.sqrt(21) * w.trend;
+
+  // ADX trend strength: amplify trend signal when trend is strong
+  const adxMultiplier = f.adx != null && f.adx > 25 ? 1.0 + (f.adx - 25) / 100 : 1.0;
 
   // ─── SIGNAL 5: Value / Fundamentals ──────────────────────────
-  // Continuous value signal centered at market median PE (~22)
   const pe = f.pe || 0;
+  const forwardPe = f.forward_pe || 0;
   const peMissing = f._pe_missing === 1 || pe === 0;
-  const valueSignal = peMissing ? 0 : Math.max(-0.03, Math.min(0.03,
-    ((22 - pe) / 100) * Math.sqrt(days / 21),
-  ));
 
-  // DCF upside from fundamental model
+  // Use forward PE if available (more predictive), else trailing
+  const effectivePe = forwardPe > 0 ? forwardPe : pe;
+  const valueSignal = peMissing ? 0 : clamp((22 - effectivePe) / 150, -0.02, 0.02);
+
+  // DCF upside
   const dcfSignal = f.dcf_upside != null
-    ? Math.max(-0.03, Math.min(0.03, f.dcf_upside * 0.10 * Math.sqrt(days / 21)))
+    ? clamp(f.dcf_upside * 0.08, -0.03, 0.03)
     : 0;
 
-  // ROE quality premium
+  // ROE quality
   const roeSignal = f.roe != null && f.roe > 0
-    ? Math.min(0.01, f.roe * 0.03) * Math.sqrt(days / 63)
+    ? Math.min(0.008, f.roe * 0.02)
     : 0;
+
+  // Growth signals
+  const revenueGrowthSignal = f.revenue_growth != null
+    ? clamp(f.revenue_growth * 0.03, -0.015, 0.015)
+    : 0;
+  const earningsGrowthSignal = f.earnings_growth != null
+    ? clamp(f.earnings_growth * 0.02, -0.015, 0.015)
+    : 0;
+
+  // PB value (lower = cheaper, centered at ~3)
+  const pbSignal = f.pb != null && f.pb > 0 && f._pb_missing !== 1
+    ? clamp((3 - f.pb) / 30, -0.01, 0.01)
+    : 0;
+
+  const fundamentalsSignal = (valueSignal + dcfSignal + roeSignal +
+    revenueGrowthSignal + earningsGrowthSignal + pbSignal) *
+    sqrtDays / Math.sqrt(21) * w.value;
 
   // ─── SIGNAL 6: Sentiment & News ──────────────────────────────
-  const sentimentSignal = (f.avg_sentiment ?? 0) * 0.03 * Math.sqrt(days / 5);
-  // Bullish/bearish ratio adds conviction
+  const sentimentRaw = (f.avg_sentiment ?? 0) * 0.025;
   const bullBearRatio = (f.bullish_ratio ?? 0.5) - (f.bearish_ratio ?? 0.5);
-  const sentimentConviction = bullBearRatio * 0.01 * Math.sqrt(days / 5);
+  const sentimentConviction = bullBearRatio * 0.01;
+  // Sentiment count weight: more articles = more reliable signal
+  const sentimentCount = f.sentiment_count ?? 0;
+  const sentimentReliability = Math.min(sentimentCount / 5, 1.0);
+
+  const sentimentSignal = (sentimentRaw + sentimentConviction) *
+    sentimentReliability * sqrtDays / Math.sqrt(5) * w.sentiment;
 
   // ─── SIGNAL 7: Analyst Consensus & Price Targets ─────────────
   let analystSignal = 0;
   if (f.analyst_consensus != null) {
-    analystSignal += f.analyst_consensus * 0.02;
+    analystSignal += f.analyst_consensus * 0.015;
   }
   if (f.target_upside != null) {
-    // Analyst price target upside, capped and scaled for longer horizons
-    analystSignal += Math.max(-0.03, Math.min(0.03,
-      f.target_upside * 0.08,
-    )) * Math.sqrt(days / 63);
+    analystSignal += clamp(f.target_upside * 0.06, -0.03, 0.03);
   }
+  // Analyst buy percentage
+  if (f.analyst_buy_pct != null) {
+    analystSignal += (f.analyst_buy_pct - 0.5) * 0.02;
+  }
+  analystSignal *= sqrtDays / Math.sqrt(63) * w.analyst;
 
   // ─── SIGNAL 8: Insider Trading ───────────────────────────────
   let insiderSignal = 0;
   if (f.insider_mspr != null) {
-    insiderSignal += (f.insider_mspr / 100) * 0.04;
+    insiderSignal += (f.insider_mspr / 100) * 0.03;
   }
   if (f.insider_cluster === 1) {
-    insiderSignal += 0.03; // Cluster buying is a strong bullish signal
+    insiderSignal += 0.025;
   }
-  if (f.insider_buy_ratio != null && f.insider_buy_ratio > 0.8) {
-    insiderSignal += 0.01; // Very high insider buy ratio
+  if (f.insider_buy_ratio != null) {
+    insiderSignal += (f.insider_buy_ratio - 0.5) * 0.015;
   }
-  insiderSignal *= Math.sqrt(days / 21);
+  if (f.insider_net_value === 1) {
+    insiderSignal += 0.008;
+  } else if (f.insider_net_value === -1) {
+    insiderSignal -= 0.005;
+  }
+  insiderSignal *= sqrtDays / Math.sqrt(21) * w.insider;
 
   // ─── SIGNAL 9: Earnings Momentum ─────────────────────────────
   let earningsSignal = 0;
   if (f.last_earnings_surprise != null) {
-    earningsSignal += f.last_earnings_surprise * 0.003 * Math.sqrt(days / 5);
+    earningsSignal += clamp(f.last_earnings_surprise * 0.002, -0.01, 0.01);
   }
   if (f.earnings_beat === 1) {
-    earningsSignal += 0.005 * Math.sqrt(days / 5);
+    earningsSignal += 0.004;
   }
+  // Earnings imminent — increase uncertainty but also opportunity
+  if (f.earnings_imminent === 1) {
+    earningsSignal *= 1.5;
+  }
+  earningsSignal *= sqrtDays / Math.sqrt(5) * w.earnings;
 
   // ─── SIGNAL 10: Macro Environment ────────────────────────────
   let macroSignal = 0;
   if (f.fed_rate != null && f.cpi_yoy != null) {
-    // Tight monetary policy + high inflation = headwind
-    if (f.fed_rate > 4 && f.cpi_yoy > 3) macroSignal = -0.005;
-    else if (f.fed_rate < 2) macroSignal = 0.005;
+    if (f.fed_rate > 4 && f.cpi_yoy > 3) macroSignal = -0.004;
+    else if (f.fed_rate < 2) macroSignal = 0.004;
+    else if (f.cpi_yoy < 2 && f.fed_rate < 3) macroSignal = 0.002;
   }
-  macroSignal *= Math.sqrt(days / 21);
-
-  // ─── ADX trend strength multiplier ───────────────────────────
-  // When ADX > 25, the stock is in a strong trend → amplify momentum signals
-  const adxMultiplier = f.adx != null && f.adx > 25 ? 1.15 : 1.0;
+  macroSignal *= sqrtDays / Math.sqrt(21) * w.macro;
 
   // ─── COMPOSITE: Expected period return ───────────────────────
-  // Sum of all signals, amplified by trend strength.
-  // NOTE: No `* (days/252)` — each signal is already horizon-scaled.
-  const periodReturn = (
+  const rawReturn = (
     momentumSignal +
     meanReversionSignal +
-    rsiSignal +
-    trendSignal +
-    valueSignal + dcfSignal + roeSignal +
-    sentimentSignal + sentimentConviction +
+    technicalsSignal +
+    trendSignal * adxMultiplier +
+    fundamentalsSignal +
+    sentimentSignal +
     analystSignal +
     insiderSignal +
     earningsSignal +
     macroSignal
-  ) * adxMultiplier;
+  );
+
+  // Cap to prevent unrealistic predictions
+  const maxRet = MAX_PERIOD_RETURN[horizon];
+  const periodReturn = clamp(rawReturn, -maxRet, maxRet);
 
   // ─── VOLATILITY ENVELOPE ─────────────────────────────────────
   const annualVol = f.volatility_20d || 0.25;
   let earningsVolBoost = 1.0;
-  if (f.earnings_imminent === 1) earningsVolBoost = 1.5;
-  const periodVol = (annualVol / Math.sqrt(252)) * Math.sqrt(days) * earningsVolBoost;
+  if (f.earnings_imminent === 1) earningsVolBoost = 1.4;
+  const periodVol = (annualVol / Math.sqrt(252)) * sqrtDays * earningsVolBoost;
 
-  // Quantile prices
+  // Quantile prices (1.28σ = 80% confidence interval)
   const pMid = currentPrice * (1 + periodReturn);
   const pLow = currentPrice * (1 + periodReturn - 1.28 * periodVol);
   const pHigh = currentPrice * (1 + periodReturn + 1.28 * periodVol);
 
-  // ─── CONFIDENCE (signal-to-noise based) ──────────────────────
-  // High confidence = strong signal relative to noise + good data quality.
-  // No longer penalizes volatile stocks — only penalizes WEAK signals.
+  // ─── CONFIDENCE (signal-to-noise + data quality + agreement) ─
   const signalToNoise = periodVol > 0
     ? Math.min(Math.abs(periodReturn) / periodVol, 1.0)
     : 0.5;
+
   const featureCount = Object.keys(f).filter((k) => !k.startsWith("_") && !k.startsWith("z_")).length;
   const dataConfidence = Math.min(featureCount / 30, 1);
-  const hasFullData = f._has_60d_data === 1 ? 0.10 : 0;
-  const sentimentConfidence = f.sentiment_strength != null
-    ? Math.min(f.sentiment_strength * 0.15, 0.10)
-    : 0;
+  const hasFullData = f._has_60d_data === 1 ? 0.08 : 0;
 
-  const confidence = signalToNoise * 0.35 +
-    dataConfidence * 0.30 +
+  // Signal agreement: do multiple signals point the same direction?
+  const signalDirections = [
+    momentumSignal, meanReversionSignal, technicalsSignal, trendSignal,
+    fundamentalsSignal, sentimentSignal, analystSignal, insiderSignal,
+  ].filter(s => Math.abs(s) > 0.001);
+  const positiveSignals = signalDirections.filter(s => s > 0).length;
+  const agreementRatio = signalDirections.length > 0
+    ? Math.abs(positiveSignals / signalDirections.length - 0.5) * 2  // 0 = split, 1 = unanimous
+    : 0;
+  const agreementConfidence = agreementRatio * 0.12;
+
+  const confidence = signalToNoise * 0.30 +
+    dataConfidence * 0.25 +
     hasFullData +
-    sentimentConfidence +
-    0.15; // Base confidence
+    agreementConfidence +
+    0.15;
 
   // ─── Output ──────────────────────────────────────────────────
   const expectedReturn = (pMid - currentPrice) / currentPrice;
@@ -251,7 +361,7 @@ export function generateForecast(
     pLow: +Math.max(pLow, 0.01).toFixed(2),
     pMid: +pMid.toFixed(2),
     pHigh: +pHigh.toFixed(2),
-    confidence: +Math.min(Math.max(confidence, 0.10), 0.99).toFixed(3),
+    confidence: +clamp(confidence, 0.10, 0.99).toFixed(3),
     expectedReturn: +expectedReturn.toFixed(4),
     riskReward: +(upside / downside).toFixed(2),
   };
