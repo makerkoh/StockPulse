@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { getProvider, isDemo } from "@/lib/providers/registry";
 import { EXTENDED_UNIVERSE } from "@/lib/providers/interfaces";
+import { discoverAndScoreUniverse } from "@/lib/services/screener";
 import {
   getCachedPrices,
   storePrices,
@@ -46,8 +47,45 @@ export async function POST(req: NextRequest) {
     const yearsBack = body.yearsBack ?? 7;
     const batchSize = body.batchSize ?? 5;
     const startIdx = body.startFromIndex ?? 0;
-    const universe = EXTENDED_UNIVERSE;
     const provider = getProvider();
+
+    // "discover" action: run FMP screener to find ~500 stocks, store tickers in DB
+    if (action === "discover") {
+      const fmpKey = await prisma.apiKey.findUnique({ where: { provider: "fmp" } });
+      if (!fmpKey) return NextResponse.json({ error: "FMP API key required for discovery" }, { status: 400 });
+      const discovered = await discoverAndScoreUniverse(fmpKey.key);
+      const tickers = discovered.map((s) => s.ticker);
+      // Store in ScreenedStock table for persistence
+      const now = new Date(); now.setHours(0, 0, 0, 0);
+      let stored = 0;
+      for (const s of discovered) {
+        try {
+          await prisma.screenedStock.upsert({
+            where: { ticker_screenedAt: { ticker: s.ticker, screenedAt: now } },
+            update: { name: s.name, sector: s.sector, marketCap: s.marketCap, price: s.price, volume: s.volume, quickScore: 0 },
+            create: { ticker: s.ticker, name: s.name, sector: s.sector, marketCap: s.marketCap, price: s.price, volume: s.volume, quickScore: 0, screenedAt: now },
+          });
+          stored++;
+        } catch {}
+      }
+      return NextResponse.json({
+        data: { action: "discover", discovered: tickers.length, stored, tickers },
+      });
+    }
+
+    // Allow custom universe from body, or fall back to EXTENDED_UNIVERSE
+    // Use "screened" to auto-load the most recently discovered stocks
+    let universe: string[] = EXTENDED_UNIVERSE;
+    if (body.universe === "screened") {
+      const recent = await prisma.screenedStock.findMany({
+        where: { screenedAt: { gte: new Date(Date.now() - 7 * 86_400_000) } },
+        orderBy: { quickScore: "desc" },
+        select: { ticker: true },
+      });
+      if (recent.length > 0) universe = recent.map((s) => s.ticker);
+    } else if (Array.isArray(body.universe) && body.universe.length > 0) {
+      universe = body.universe;
+    }
 
     // For "all" mode, reduce batch size since we're doing 6+ API calls per stock
     const effectiveBatchSize = action === "all" ? Math.min(batchSize, 3) : batchSize;

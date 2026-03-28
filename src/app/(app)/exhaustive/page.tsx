@@ -99,7 +99,29 @@ export default function ExhaustiveBacktestPage() {
     } catch {}
   }
 
-  async function runBulkCache(action: "prices" | "fundamentals" | "enrichment" | "all") {
+  async function discoverStocks() {
+    setIsCaching(true);
+    setCacheProgress({ action: "discover", processed: 0, total: 1 });
+    try {
+      const res: Response = await fetch("/api/bulk-cache", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "discover" }),
+      });
+      const json = await res.json();
+      if (json.data) {
+        setCacheProgress({ action: "discover", processed: json.data.discovered, total: json.data.discovered });
+        alert(`Discovered ${json.data.discovered} stocks! Now click "Fetch All Data" to cache their data.`);
+      }
+    } catch (err) {
+      console.error("Discovery failed:", err);
+    } finally {
+      setIsCaching(false);
+      fetchCacheStats();
+    }
+  }
+
+  async function runBulkCache(action: "prices" | "fundamentals" | "enrichment" | "all", universe?: string) {
     setIsCaching(true);
     cacheAbortRef.current = false;
     let nextIndex: number | null = 0;
@@ -109,7 +131,7 @@ export default function ExhaustiveBacktestPage() {
         const res: Response = await fetch("/api/bulk-cache", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action, yearsBack: 7, batchSize: 5, startFromIndex: nextIndex }),
+          body: JSON.stringify({ action, yearsBack: 10, batchSize: 5, startFromIndex: nextIndex, universe: universe || undefined }),
         });
         const json = await res.json();
         if (json.error) { console.error("Cache error:", json.error); break; }
@@ -288,13 +310,16 @@ export default function ExhaustiveBacktestPage() {
               </Button>
             ) : (
               <>
-                <Button variant="secondary" size="sm" onClick={() => runBulkCache("prices")}>
-                  Fetch Prices (7yr)
+                <Button variant="ghost" size="sm" onClick={discoverStocks}>
+                  Discover 500 Stocks
                 </Button>
-                <Button variant="secondary" size="sm" onClick={() => runBulkCache("enrichment")}>
+                <Button variant="secondary" size="sm" onClick={() => runBulkCache("prices", "screened")}>
+                  Fetch Prices (All)
+                </Button>
+                <Button variant="secondary" size="sm" onClick={() => runBulkCache("enrichment", "screened")}>
                   Fetch Enrichment
                 </Button>
-                <Button size="sm" onClick={() => runBulkCache("all")}>
+                <Button size="sm" onClick={() => runBulkCache("all", "screened")}>
                   Fetch All Data
                 </Button>
               </>
