@@ -292,6 +292,32 @@ export function generateForecast(
   }
   macroSignal *= sqrtDays / Math.sqrt(21) * w.macro;
 
+  // ─── Z-SCORE BOOST: Use cross-sectional relative position ───
+  // If z-scored features are available (after crossSectionalZScore),
+  // blend them in to improve cross-sectional ranking.
+  // z-scores tell us how a stock compares to the universe, not just its raw value.
+  let zScoreBoost = 0;
+  const zMom20 = f.z_return_20d ?? 0;
+  const zMom60 = f.z_return_60d ?? 0;
+  const zVol = f.z_volume_ratio ?? 0;
+  const zSentiment = f.z_avg_sentiment ?? 0;
+  const zInsider = f.z_insider_mspr ?? 0;
+  const zAnalyst = f.z_analyst_consensus ?? 0;
+  const zDcf = f.z_dcf_upside ?? 0;
+  const zTarget = f.z_target_upside ?? 0;
+
+  // Blend: stocks that are relatively strong across multiple factors get a boost
+  zScoreBoost = (
+    zMom20 * 0.004 * w.momentum +
+    zMom60 * 0.002 * w.momentum +
+    zVol * 0.001 * w.technicals +
+    zSentiment * 0.002 * w.sentiment +
+    zInsider * 0.003 * w.insider +
+    zAnalyst * 0.002 * w.analyst +
+    zDcf * 0.003 * w.value +
+    zTarget * 0.002 * w.analyst
+  ) * sqrtDays / Math.sqrt(5);
+
   // ─── COMPOSITE: Expected period return ───────────────────────
   const rawReturn = (
     momentumSignal +
@@ -303,7 +329,8 @@ export function generateForecast(
     analystSignal +
     insiderSignal +
     earningsSignal +
-    macroSignal
+    macroSignal +
+    zScoreBoost
   );
 
   // Cap to prevent unrealistic predictions
@@ -316,10 +343,14 @@ export function generateForecast(
   if (f.earnings_imminent === 1) earningsVolBoost = 1.4;
   const periodVol = (annualVol / Math.sqrt(252)) * sqrtDays * earningsVolBoost;
 
-  // Quantile prices (1.28σ = 80% confidence interval)
+  // Quantile prices
+  // Use 1.65σ for wider P10/P90 (covers ~90% of normal distribution)
+  // Add signal-driven uncertainty: when signals are strong, outcomes spread more
+  const signalUncertainty = Math.abs(periodReturn) * 0.3; // Larger signals = wider range
+  const effectiveVol = periodVol + signalUncertainty;
   const pMid = currentPrice * (1 + periodReturn);
-  const pLow = currentPrice * (1 + periodReturn - 1.28 * periodVol);
-  const pHigh = currentPrice * (1 + periodReturn + 1.28 * periodVol);
+  const pLow = currentPrice * (1 + periodReturn - 1.65 * effectiveVol);
+  const pHigh = currentPrice * (1 + periodReturn + 1.65 * effectiveVol);
 
   // ─── CONFIDENCE (signal-to-noise + data quality + agreement) ─
   const signalToNoise = periodVol > 0
