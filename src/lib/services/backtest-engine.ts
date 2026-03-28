@@ -104,10 +104,10 @@ export async function runRealBacktest(config: BacktestConfig): Promise<BacktestO
     transactionCostBps = 10,
   } = config;
 
+  const days = HORIZON_DAYS[horizon];
   // Use extended universe (89 stocks) for weekly+ horizons
   // Use default universe (40 stocks) for daily to avoid timeout
   const tickers = config.universe || (days <= 1 ? DEFAULT_UNIVERSE : EXTENDED_UNIVERSE);
-  const days = HORIZON_DAYS[horizon];
   const provider = getProvider();
 
   // ── Step 1: Download historical prices (uses DB cache) ──────────
