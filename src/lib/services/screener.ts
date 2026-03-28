@@ -310,8 +310,10 @@ export async function getScreenedUniverse(topN: number = 50): Promise<string[] |
     });
 
     if (stocks.length === 0) return null;
-    return stocks.map((s) => s.ticker);
-  } catch {
+    return stocks.map((s: { ticker: string }) => s.ticker);
+  } catch (err) {
+    // Table may not exist yet — this is fine, fall back to static universe
+    console.warn("[screener] getScreenedUniverse failed:", err instanceof Error ? err.message : "unknown");
     return null;
   }
 }

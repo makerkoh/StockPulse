@@ -221,7 +221,13 @@ export async function runPrediction(
   if (universe && universe.length > 0) {
     tickers = universe;
   } else {
-    const screened = await getScreenedUniverse(50);
+    let screened: string[] | null = null;
+    try {
+      screened = await getScreenedUniverse(50);
+    } catch {
+      // ScreenedStock table may not exist yet — gracefully fall back
+      console.warn("[pipeline] getScreenedUniverse failed — using DEFAULT_UNIVERSE");
+    }
     tickers = screened && screened.length > 10 ? screened : DEFAULT_UNIVERSE;
   }
 
