@@ -623,7 +623,7 @@ export async function getExhaustiveMetrics(runId: string): Promise<AggregatedMet
   // Group by (strategy, horizon)
   const groups = new Map<string, typeof results>();
   for (const r of results) {
-    const key = `${r.strategy}_${r.horizon}`;
+    const key = `${r.strategy}||${r.horizon}`;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key)!.push(r);
   }
@@ -631,7 +631,7 @@ export async function getExhaustiveMetrics(runId: string): Promise<AggregatedMet
   const metrics: AggregatedMetrics[] = [];
 
   for (const [key, rows] of groups) {
-    const [strategy, horizon] = key.split("_");
+    const [strategy, horizon] = key.split("||");
     const n = rows.length;
     if (n === 0) continue;
 

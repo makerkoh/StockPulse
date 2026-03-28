@@ -56,6 +56,17 @@ interface DailyMetric {
 
 // ─── Page ─────────────────────────────────────────────────────────────
 
+interface CacheStats {
+  stocks: number;
+  priceBars: number;
+  priceRange: { from: string; to: string } | null;
+  fundamentals: number;
+  insiderTrades: number;
+  analystRatings: number;
+  earnings: number;
+  news: number;
+}
+
 export default function ExhaustiveBacktestPage() {
   const [runs, setRuns] = useState<RunInfo[]>([]);
   const [activeRun, setActiveRun] = useState<RunInfo | null>(null);
@@ -68,10 +79,59 @@ export default function ExhaustiveBacktestPage() {
   const [progress, setProgress] = useState({ processed: 0, total: 0, lastDate: "" });
   const abortRef = useRef(false);
 
-  // Load runs on mount
+  // Cache stats + bulk fetch state
+  const [cacheStats, setCacheStats] = useState<CacheStats | null>(null);
+  const [isCaching, setIsCaching] = useState(false);
+  const [cacheProgress, setCacheProgress] = useState({ action: "", processed: 0, total: 0 });
+  const cacheAbortRef = useRef(false);
+
+  // Load runs + cache stats on mount
   useEffect(() => {
     fetchRuns();
+    fetchCacheStats();
   }, []);
+
+  async function fetchCacheStats() {
+    try {
+      const res = await fetch("/api/bulk-cache");
+      const { data } = await res.json();
+      if (data) setCacheStats(data);
+    } catch {}
+  }
+
+  async function runBulkCache(action: "prices" | "fundamentals" | "enrichment" | "all") {
+    setIsCaching(true);
+    cacheAbortRef.current = false;
+    let nextIndex: number | null = 0;
+
+    while (nextIndex !== null && !cacheAbortRef.current) {
+      try {
+        const res: Response = await fetch("/api/bulk-cache", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action, yearsBack: 7, batchSize: 5, startFromIndex: nextIndex }),
+        });
+        const json = await res.json();
+        if (json.error) { console.error("Cache error:", json.error); break; }
+        const data = json.data;
+
+        setCacheProgress({
+          action,
+          processed: (data.startIndex || 0) + data.processed,
+          total: data.total,
+        });
+        nextIndex = data.nextIndex;
+
+        if (data.done) break;
+      } catch (err) {
+        console.error("Cache fetch failed:", err);
+        break;
+      }
+    }
+
+    setIsCaching(false);
+    fetchCacheStats();
+  }
 
   async function fetchRuns() {
     setIsLoading(true);
@@ -216,6 +276,83 @@ export default function ExhaustiveBacktestPage() {
           )}
         </div>
       </div>
+
+      {/* Data Cache Stats */}
+      <Card className="p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-sm font-semibold text-text-primary">Cached Data</h2>
+          <div className="flex gap-2">
+            {isCaching ? (
+              <Button variant="secondary" size="sm" onClick={() => { cacheAbortRef.current = true; }}>
+                Stop Caching
+              </Button>
+            ) : (
+              <>
+                <Button variant="secondary" size="sm" onClick={() => runBulkCache("prices")}>
+                  Fetch Prices (7yr)
+                </Button>
+                <Button variant="secondary" size="sm" onClick={() => runBulkCache("enrichment")}>
+                  Fetch Enrichment
+                </Button>
+                <Button size="sm" onClick={() => runBulkCache("all")}>
+                  Fetch All Data
+                </Button>
+              </>
+            )}
+          </div>
+        </div>
+
+        {isCaching && (
+          <div className="mb-3">
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-xs text-text-secondary">
+                Caching {cacheProgress.action}: {cacheProgress.processed}/{cacheProgress.total} stocks
+              </span>
+              <span className="text-xs font-mono text-text-primary">
+                {cacheProgress.total > 0 ? ((cacheProgress.processed / cacheProgress.total) * 100).toFixed(0) : 0}%
+              </span>
+            </div>
+            <div className="w-full bg-surface-3 rounded-full h-1.5">
+              <div
+                className="bg-amber-500 h-1.5 rounded-full transition-all duration-300"
+                style={{ width: `${cacheProgress.total > 0 ? (cacheProgress.processed / cacheProgress.total) * 100 : 0}%` }}
+              />
+            </div>
+          </div>
+        )}
+
+        {cacheStats ? (
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="bg-surface-2 rounded-lg p-3">
+              <div className="text-xs text-text-tertiary">Price Bars</div>
+              <div className="text-lg font-mono text-text-primary">{cacheStats.priceBars.toLocaleString()}</div>
+              {cacheStats.priceRange && (
+                <div className="text-2xs text-text-tertiary">{cacheStats.priceRange.from} to {cacheStats.priceRange.to}</div>
+              )}
+            </div>
+            <div className="bg-surface-2 rounded-lg p-3">
+              <div className="text-xs text-text-tertiary">Fundamentals</div>
+              <div className="text-lg font-mono text-text-primary">{cacheStats.fundamentals.toLocaleString()}</div>
+              <div className="text-2xs text-text-tertiary">{cacheStats.stocks} stocks</div>
+            </div>
+            <div className="bg-surface-2 rounded-lg p-3">
+              <div className="text-xs text-text-tertiary">Enrichment</div>
+              <div className="text-lg font-mono text-text-primary">
+                {(cacheStats.insiderTrades + cacheStats.analystRatings + cacheStats.earnings).toLocaleString()}
+              </div>
+              <div className="text-2xs text-text-tertiary">
+                {cacheStats.insiderTrades} insider / {cacheStats.analystRatings} analyst / {cacheStats.earnings} earnings
+              </div>
+            </div>
+            <div className="bg-surface-2 rounded-lg p-3">
+              <div className="text-xs text-text-tertiary">News Articles</div>
+              <div className="text-lg font-mono text-text-primary">{cacheStats.news.toLocaleString()}</div>
+            </div>
+          </div>
+        ) : (
+          <div className="text-sm text-text-tertiary">Loading cache stats...</div>
+        )}
+      </Card>
 
       {/* Progress Bar */}
       {(isRunning || activeRun?.status === "running") && (
