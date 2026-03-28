@@ -210,8 +210,8 @@ export default function DashboardShell() {
             title="No predictions yet"
             description={
               apiLimited
-                ? "Free tier: analyzing S&P 40 universe (~91 API calls). Click 'API Limited' to expand."
-                : "Full access: analyzing S&P 100 universe (~151 API calls)."
+                ? "Free tier: analyzing S&P 40 universe (~5 API calls with cache, ~91 first run). Click 'API Limited' to expand."
+                : "Full access: analyzing S&P 100 universe (~10 API calls with cache, ~151 first run)."
             }
             action={
               <Button onClick={runPrediction}>Run First Prediction</Button>

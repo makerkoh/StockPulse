@@ -239,7 +239,7 @@ export default function BacktestPage() {
         <Card>
           <EmptyState
             title="No backtest results"
-            description="Select a strategy, horizon, and ranking mode, then run a real walk-forward backtest using historical market data. Uses ~80 API calls."
+            description="Select a strategy, horizon, and ranking mode, then run a real walk-forward backtest using historical market data. First run: ~40 API calls (cached after)."
             action={<Button onClick={runBacktest}>Run Backtest</Button>}
           />
         </Card>

@@ -36,11 +36,12 @@ export default function ForecastTable({ stocks, rankMode }: ForecastTableProps) 
 
       <div className="bg-surface-1 border border-border rounded-xl overflow-hidden">
         {/* Table header */}
-        <div className="grid grid-cols-[3rem_5rem_1fr_5.5rem_5.5rem_5.5rem_5.5rem_4.5rem_4rem] gap-2 px-4 py-2.5 text-2xs font-medium text-text-tertiary uppercase tracking-wider border-b border-border bg-surface-2/50">
+        <div className="grid grid-cols-[3rem_5rem_1fr_5.5rem_5rem_5rem_5rem_5rem_4.5rem_4rem] gap-2 px-4 py-2.5 text-2xs font-medium text-text-tertiary uppercase tracking-wider border-b border-border bg-surface-2/50">
           <span>#</span>
           <span>Ticker</span>
           <span>Name</span>
           <span className="text-right">Price</span>
+          <span className="text-right">Exp. Ret</span>
           <span className="text-right">P10</span>
           <span className="text-right">P50</span>
           <span className="text-right">P90</span>
@@ -53,7 +54,7 @@ export default function ForecastTable({ stocks, rankMode }: ForecastTableProps) 
           <div key={stock.ticker}>
             <div
               className={cn(
-                "grid grid-cols-[3rem_5rem_1fr_5.5rem_5.5rem_5.5rem_5.5rem_4.5rem_4rem] gap-2 px-4 py-3 items-center table-row-hover cursor-pointer stagger-item",
+                "grid grid-cols-[3rem_5rem_1fr_5.5rem_5rem_5rem_5rem_5rem_4.5rem_4rem] gap-2 px-4 py-3 items-center table-row-hover cursor-pointer stagger-item",
                 expandedTicker === stock.ticker && "bg-surface-2/30",
                 i < 3 && "border-l-2 border-l-accent/40"
               )}
@@ -76,6 +77,9 @@ export default function ForecastTable({ stocks, rankMode }: ForecastTableProps) 
               <span className="text-xs text-text-secondary truncate">{stock.name}</span>
               <span className="text-xs font-mono text-text-primary text-right">
                 {formatCurrency(stock.currentPrice)}
+              </span>
+              <span className={cn("text-xs font-mono font-semibold text-right", signColor(stock.expectedReturn))}>
+                {formatPct(stock.expectedReturn * 100)}
               </span>
               <span className={cn("text-xs font-mono text-right", signColor(stock.pLow - stock.currentPrice))}>
                 {formatCurrency(stock.pLow)}
