@@ -292,6 +292,64 @@ export function generateForecast(
   }
   macroSignal *= sqrtDays / Math.sqrt(21) * w.macro;
 
+  // ─── SIGNAL 11: Momentum Acceleration (2nd derivative) ──────
+  // Is momentum speeding up or slowing down?
+  const ret5d = f.return_5d || 0;
+  const ret20d = f.return_20d || 0;
+  const ret60d = f.return_60d || 0;
+  // Short-term acceleration: 5d momentum vs 20d momentum
+  const momAccel = ret5d - ret20d * (5 / 20); // Positive = accelerating
+  const accelSignal = clamp(momAccel * 0.5, -0.015, 0.015) *
+    sqrtDays / Math.sqrt(5) * w.momentum;
+
+  // ─── SIGNAL 12: Multi-Timeframe Trend Alignment ────────────
+  // When ALL moving averages agree (price > SMA20 > SMA50 > SMA200),
+  // the trend is much stronger than any single SMA signal.
+  const aboveSMA20 = (f.price_vs_sma20 ?? 0) > 0 ? 1 : -1;
+  const aboveSMA50 = (f.price_vs_sma50 ?? 0) > 0 ? 1 : -1;
+  const aboveSMA200 = (f.price_vs_sma200 ?? 0) > 0 ? 1 : -1;
+  const trendAlignment = (aboveSMA20 + aboveSMA50 + aboveSMA200) / 3; // -1 to +1
+  // Only activate when fully aligned (all same direction)
+  const alignmentSignal = Math.abs(trendAlignment) === 1
+    ? trendAlignment * 0.012 * sqrtDays / Math.sqrt(21) * w.trend
+    : 0;
+
+  // ─── SIGNAL 13: Nonlinear RSI Extremes ─────────────────────
+  // RSI at extreme levels (< 25 or > 75) is much more predictive
+  // than RSI at moderate levels. Apply extra contrarian weight.
+  let rsiExtremeSignal = 0;
+  if (rsiVal < 25) {
+    rsiExtremeSignal = (25 - rsiVal) / 100 * 0.06; // Deeply oversold = strong buy
+  } else if (rsiVal > 75) {
+    rsiExtremeSignal = (75 - rsiVal) / 100 * 0.06; // Deeply overbought = strong sell
+  }
+  rsiExtremeSignal *= sqrtDays / Math.sqrt(5) * w.technicals;
+
+  // ─── SIGNAL 14: Feature Interaction (confluence) ───────────
+  // When momentum, trend, and volume ALL agree, the signal is
+  // multiplicatively stronger (not just additive).
+  const momDirection = rawMomentum > 0.005 ? 1 : rawMomentum < -0.005 ? -1 : 0;
+  const trendDirection = trendAlignment > 0.3 ? 1 : trendAlignment < -0.3 ? -1 : 0;
+  const volConfirm = volRatio > 1.2 ? 1 : 0;
+  // Confluence: all three agree AND volume confirms
+  const confluenceSignal = momDirection !== 0 && momDirection === trendDirection && volConfirm === 1
+    ? momDirection * 0.01 * sqrtDays / Math.sqrt(5) * w.momentum
+    : 0;
+
+  // ─── SIGNAL 15: Volatility Contraction Breakout ────────────
+  // When recent volatility is much lower than historical, a breakout
+  // may be imminent. Direction guided by trend.
+  const vol10d = f.volatility_10d ?? 0;
+  const vol63d = f.volatility_63d ?? 0;
+  let volBreakoutSignal = 0;
+  if (vol63d > 0 && vol10d > 0) {
+    const volRatioShortLong = vol10d / vol63d;
+    if (volRatioShortLong < 0.6) {
+      // Volatility contraction — breakout likely, use trend for direction
+      volBreakoutSignal = trendAlignment * 0.008 * sqrtDays / Math.sqrt(5) * w.technicals;
+    }
+  }
+
   // ─── Z-SCORE BOOST: Use cross-sectional relative position ───
   // If z-scored features are available (after crossSectionalZScore),
   // blend them in to improve cross-sectional ranking.
@@ -330,6 +388,11 @@ export function generateForecast(
     insiderSignal +
     earningsSignal +
     macroSignal +
+    accelSignal +
+    alignmentSignal +
+    rsiExtremeSignal +
+    confluenceSignal +
+    volBreakoutSignal +
     zScoreBoost
   );
 
@@ -365,6 +428,7 @@ export function generateForecast(
   const signalDirections = [
     momentumSignal, meanReversionSignal, technicalsSignal, trendSignal,
     fundamentalsSignal, sentimentSignal, analystSignal, insiderSignal,
+    accelSignal, alignmentSignal, confluenceSignal,
   ].filter(s => Math.abs(s) > 0.001);
   const positiveSignals = signalDirections.filter(s => s > 0).length;
   const agreementRatio = signalDirections.length > 0
