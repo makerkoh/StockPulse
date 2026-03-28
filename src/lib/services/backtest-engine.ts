@@ -99,13 +99,14 @@ export async function runRealBacktest(config: BacktestConfig): Promise<BacktestO
     horizon,
     rankMode,
     strategy,
-    topN = 5,
+    topN = 10,
     lookbackMonths = 6,
     transactionCostBps = 10,
   } = config;
 
-  // Use extended universe (89 stocks) by default for more robust backtesting
-  const tickers = config.universe || EXTENDED_UNIVERSE;
+  // Use extended universe (89 stocks) for weekly+ horizons
+  // Use default universe (40 stocks) for daily to avoid timeout
+  const tickers = config.universe || (days <= 1 ? DEFAULT_UNIVERSE : EXTENDED_UNIVERSE);
   const days = HORIZON_DAYS[horizon];
   const provider = getProvider();
 

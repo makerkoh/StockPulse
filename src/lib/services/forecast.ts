@@ -474,9 +474,14 @@ export function generateForecast(
     zScoreBoost
   ) * dispersionMultiplier;
 
+  // Shrinkage: pull predictions toward zero to reduce forecast error
+  // This is standard practice — overconfident signals are the #1 source of error
+  const SHRINKAGE = 0.7; // Keep 70% of raw signal, shrink 30% toward zero
+  const shrunkReturn = rawReturn * SHRINKAGE;
+
   // Cap to prevent unrealistic predictions
   const maxRet = MAX_PERIOD_RETURN[horizon];
-  const periodReturn = clamp(rawReturn, -maxRet, maxRet);
+  const periodReturn = clamp(shrunkReturn, -maxRet, maxRet);
 
   // ─── VOLATILITY ENVELOPE ─────────────────────────────────────
   const annualVol = f.volatility_20d || 0.25;
