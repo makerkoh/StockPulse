@@ -49,7 +49,9 @@ export async function POST(req: NextRequest) {
     const universe = EXTENDED_UNIVERSE;
     const provider = getProvider();
 
-    const batch = universe.slice(startIdx, startIdx + batchSize);
+    // For "all" mode, reduce batch size since we're doing 6+ API calls per stock
+    const effectiveBatchSize = action === "all" ? Math.min(batchSize, 3) : batchSize;
+    const batch = universe.slice(startIdx, startIdx + effectiveBatchSize);
     if (batch.length === 0) {
       return NextResponse.json({
         data: { processed: 0, total: universe.length, nextIndex: null, done: true, action },
@@ -59,23 +61,34 @@ export async function POST(req: NextRequest) {
     const results: { ticker: string; action: string; success: boolean; error?: string }[] = [];
 
     // ── PRICES: Fetch full history (7+ years) ─────────────────────
+    // getCachedPrices only checks if the *newest* bar is current, but we need
+    // to also backfill older history. So: check if oldest cached bar is near
+    // the requested `from` date. If not, fetch the gap.
     if (action === "prices" || action === "all") {
       const to = new Date();
       const from = new Date(Date.now() - yearsBack * 365.25 * 86_400_000);
 
       for (const ticker of batch) {
         try {
-          const { cached, fetchFrom } = await getCachedPrices(ticker, from, to);
-          if (!fetchFrom) {
-            results.push({ ticker, action: "prices", success: true, error: `already cached (${cached.length} bars)` });
+          const { cached } = await getCachedPrices(ticker, from, to);
+
+          // Check if we have data going back far enough
+          const oldestCached = cached.length > 0 ? new Date(cached[0].date) : null;
+          const needsBackfill = !oldestCached || oldestCached.getTime() > from.getTime() + 30 * 86_400_000;
+
+          if (!needsBackfill) {
+            results.push({ ticker, action: "prices", success: true, error: `already cached (${cached.length} bars from ${cached[0].date})` });
             continue;
           }
-          const bars = await provider.getHistoricalPrices(ticker, fetchFrom, to);
+
+          // Fetch from requested start to the oldest cached date (or to today if no cache)
+          const fetchTo = oldestCached || to;
+          const bars = await provider.getHistoricalPrices(ticker, from, fetchTo);
           if (bars.length > 0) {
             await storePrices(ticker, bars);
-            results.push({ ticker, action: "prices", success: true, error: `fetched ${bars.length} new bars` });
+            results.push({ ticker, action: "prices", success: true, error: `backfilled ${bars.length} bars from ${from.toISOString().split("T")[0]}` });
           } else {
-            results.push({ ticker, action: "prices", success: true, error: "no new bars available" });
+            results.push({ ticker, action: "prices", success: true, error: "no historical bars available from API" });
           }
         } catch (err) {
           results.push({ ticker, action: "prices", success: false, error: String(err) });
@@ -149,7 +162,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const nextIndex = startIdx + batchSize;
+    const nextIndex = startIdx + effectiveBatchSize;
     const done = nextIndex >= universe.length;
 
     return NextResponse.json({
