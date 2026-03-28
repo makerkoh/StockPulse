@@ -51,9 +51,9 @@ export async function POST(req: NextRequest) {
 
     // "discover" action: run FMP screener to find ~500 stocks, store tickers in DB
     if (action === "discover") {
-      const fmpKey = await prisma.apiKey.findUnique({ where: { provider: "fmp" } });
-      if (!fmpKey) return NextResponse.json({ error: "FMP API key required for discovery" }, { status: 400 });
-      const discovered = await discoverAndScoreUniverse(fmpKey.key);
+      const fmpKey = process.env.FMP_API_KEY;
+      if (!fmpKey) return NextResponse.json({ error: "FMP_API_KEY env var required for discovery" }, { status: 400 });
+      const discovered = await discoverAndScoreUniverse(fmpKey);
       const tickers = discovered.map((s) => s.ticker);
       // Store in ScreenedStock table for persistence
       const now = new Date(); now.setHours(0, 0, 0, 0);
