@@ -116,9 +116,7 @@ export function scoreStock(
       const zAnalyst = (f.z_analyst_consensus ?? 0) * 2 * w.fundamentals;
       const zTarget = (f.z_target_upside ?? 0) * 2 * w.fundamentals;
       const zDcf = (f.z_dcf_upside ?? 0) * 2 * w.fundamentals;
-      const zExcess = (f.z_excess_momentum ?? 0) * 3 * w.momentum;
-      const zRelStr = (f.z_relative_strength ?? 0) * 2 * w.momentum;
-      const zScoreComponent = zMom + zExcess + zRelStr + zSent + zInsider + zAnalyst + zTarget + zDcf;
+      const zScoreComponent = zMom + zSent + zInsider + zAnalyst + zTarget + zDcf;
       breakdown.z_score = zScoreComponent;
 
       // Blend forecast return with z-score ranking

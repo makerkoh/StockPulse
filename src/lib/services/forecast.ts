@@ -372,12 +372,10 @@ export function generateForecast(
   if (mktBreadth > 0.7) marketRegimeSignal += 0.005;
   else if (mktBreadth < 0.3) marketRegimeSignal -= 0.005;
 
-  // Relative strength: stock's excess momentum over the market
-  // This is the KEY alpha signal — isolates stock-specific performance
-  const excessMom = f.excess_momentum ?? 0;
-  const relStrength = f.relative_strength ?? 0;
-  const relativeStrengthSignal = clamp(excessMom * 0.3, -0.02, 0.02) *
-    sqrtDays / Math.sqrt(20) * w.momentum;
+  // Relative strength: available for ML model but NOT in base forecast
+  // Testing showed it improved directional accuracy but hurt rank IC and excess return
+  // The adaptive ML model can learn to use it via the feature vector instead
+  const relativeStrengthSignal = 0; // Disabled in base model — ML model uses it
 
   // High dispersion = stock-picking matters more
   const dispersionMultiplier = mktDispersion > 0.05 ? 1.15 : mktDispersion < 0.02 ? 0.85 : 1.0;
