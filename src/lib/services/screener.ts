@@ -14,11 +14,24 @@ import { prisma } from "@/lib/prisma";
 import { FINNHUB_LIMITER } from "@/lib/providers/rate-limiter";
 
 // ─── Stage 1: FMP Stock Screener ────────────────────────────────────
+interface ScreenerResult {
+  ticker: string;
+  name: string;
+  sector: string;
+  marketCap: number;
+  price: number;
+  changePct: number;
+  volume: number;
+  beta: number;
+}
+
 /**
- * Use FMP's stock screener to get ~500 liquid US stocks.
- * Costs 1 FMP API call.
+ * Use FMP's stock screener to get ~500 liquid US stocks WITH data.
+ * The screener response includes price, change%, volume, market cap,
+ * sector, and beta — enough to compute a quick score WITHOUT Finnhub.
+ * Costs 1 FMP API call. Completes in <5 seconds.
  */
-export async function discoverUniverse(fmpApiKey: string): Promise<string[]> {
+export async function discoverAndScoreUniverse(fmpApiKey: string): Promise<ScreenerResult[]> {
   try {
     const url = new URL("https://financialmodelingprep.com/api/v3/stock-screener");
     url.searchParams.set("apikey", fmpApiKey);
@@ -38,15 +51,23 @@ export async function discoverUniverse(fmpApiKey: string): Promise<string[]> {
     const data = await res.json();
     if (!Array.isArray(data)) return [];
 
-    // Store basic info and return tickers
-    const tickers = data
-      .filter((s: any) => s.symbol && !s.symbol.includes(".") && !s.symbol.includes("-"))
-      .map((s: any) => s.symbol as string);
+    const results: ScreenerResult[] = data
+      .filter((s: any) => s.symbol && !s.symbol.includes(".") && !s.symbol.includes("-") && s.price > 0)
+      .map((s: any) => ({
+        ticker: s.symbol,
+        name: s.companyName || s.symbol,
+        sector: s.sector || "Unknown",
+        marketCap: s.marketCap || 0,
+        price: s.price || 0,
+        changePct: s.changePercentage ?? s.changesPercentage ?? 0,
+        volume: s.volume || 0,
+        beta: s.beta || 1,
+      }));
 
-    console.log(`[screener] Stage 1: discovered ${tickers.length} stocks from FMP screener`);
-    return tickers;
+    console.log(`[screener] Discovered ${results.length} stocks from FMP screener`);
+    return results;
   } catch (err) {
-    console.error("[screener] Stage 1 error:", err);
+    console.error("[screener] Discovery error:", err);
     return [];
   }
 }
@@ -168,7 +189,10 @@ export async function quickScan(
 // ─── Stage 3: Store and Return Top N ────────────────────────────────
 
 /**
- * Run the full screening pipeline and store results in the DB.
+ * Run the screening pipeline and store results in the DB.
+ *
+ * Fast mode (default): Uses FMP screener data only (1 API call, <10 seconds)
+ * Full mode: Also scans via Finnhub for insider signals (~8 minutes, needs background task)
  *
  * @returns Top N tickers for deep analysis
  */
@@ -176,21 +200,54 @@ export async function runScreeningPipeline(
   fmpApiKey: string,
   finnhubApiKey: string,
   topN: number = 50,
+  fullScan: boolean = false,
 ): Promise<string[]> {
   console.log("[screener] Starting screening pipeline...");
 
-  // Stage 1: Discover universe (1 FMP call)
-  const universe = await discoverUniverse(fmpApiKey);
+  // Stage 1+2: Discover and score from FMP (1 API call, ~3 seconds)
+  const universe = await discoverAndScoreUniverse(fmpApiKey);
   if (universe.length === 0) {
     console.error("[screener] No stocks discovered — using fallback");
     return [];
   }
 
-  // Stage 2: Quick scan via Finnhub
-  const scored = await quickScan(universe, finnhubApiKey);
-  if (scored.length === 0) {
-    console.error("[screener] No stocks scored — using fallback");
-    return [];
+  // Compute quick scores from FMP screener data
+  type ScoredResult = ScreenerResult & { quickScore: number };
+  const scored: ScoredResult[] = universe.map((s) => {
+    // Score components:
+    // - Absolute price change (stocks moving = interesting)
+    const momentumScore = Math.min(Math.abs(s.changePct), 10) * 0.5;
+    // - Volume relative to market cap (high turnover = conviction)
+    const turnover = s.marketCap > 0 ? (s.volume * s.price) / s.marketCap : 0;
+    const volumeScore = Math.min(turnover * 500, 5);
+    // - Beta (higher beta = more responsive to market, more tradeable)
+    const betaScore = Math.min(Math.abs(s.beta - 1) * 2, 3);
+    // - Market cap tier bonus (mid-cap often has more alpha than mega-cap)
+    const capScore = s.marketCap < 50e9 ? 1.5 : s.marketCap < 200e9 ? 1.0 : 0.5;
+
+    return {
+      ...s,
+      quickScore: momentumScore + volumeScore + betaScore + capScore,
+    };
+  });
+
+  // Sort by quick score descending
+  scored.sort((a, b) => b.quickScore - a.quickScore);
+
+  // Optional: Finnhub deep scan on top candidates (only if fullScan enabled)
+  if (fullScan && finnhubApiKey) {
+    const topForScan = scored.slice(0, Math.min(100, scored.length)).map((s) => s.ticker);
+    const finnhubScored = await quickScan(topForScan, finnhubApiKey);
+
+    // Merge Finnhub scores back
+    const finnhubMap = new Map(finnhubScored.map((s) => [s.ticker, s]));
+    for (const stock of scored) {
+      const fh = finnhubMap.get(stock.ticker);
+      if (fh) {
+        stock.quickScore += fh.mspr * 2; // Insider buying boost
+      }
+    }
+    scored.sort((a, b) => b.quickScore - a.quickScore);
   }
 
   // Stage 3: Store in DB and return top N
@@ -208,34 +265,32 @@ export async function runScreeningPipeline(
     await prisma.screenedStock.upsert({
       where: { ticker_screenedAt: { ticker: stock.ticker, screenedAt: now } },
       update: {
+        name: stock.name,
+        sector: stock.sector,
+        marketCap: stock.marketCap,
         price: stock.price,
         changePct: stock.changePct,
         volume: stock.volume,
         quickScore: stock.quickScore,
-        signals: {
-          mspr: stock.mspr,
-          consensusScore: stock.consensusScore,
-          changePct: stock.changePct,
-        },
+        signals: { changePct: stock.changePct, beta: stock.beta },
       },
       create: {
         ticker: stock.ticker,
+        name: stock.name,
+        sector: stock.sector,
+        marketCap: stock.marketCap,
         price: stock.price,
         changePct: stock.changePct,
         volume: stock.volume,
         quickScore: stock.quickScore,
         screenedAt: now,
-        signals: {
-          mspr: stock.mspr,
-          consensusScore: stock.consensusScore,
-          changePct: stock.changePct,
-        },
+        signals: { changePct: stock.changePct, beta: stock.beta },
       },
     }).catch(() => {});
   }
 
   const topTickers = topStocks.map((s) => s.ticker);
-  console.log(`[screener] Pipeline complete: ${topTickers.length} stocks selected`);
+  console.log(`[screener] Pipeline complete: ${topTickers.length} stocks from ${universe.length} candidates`);
   console.log(`[screener] Top 10: ${topTickers.slice(0, 10).join(", ")}`);
 
   return topTickers;

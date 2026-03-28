@@ -3,8 +3,9 @@ import { getSession } from "@/lib/auth/session";
 import { runScreeningPipeline, getScreenedUniverse } from "@/lib/services/screener";
 import { prisma } from "@/lib/prisma";
 
-// Screening can take several minutes (scanning 500 stocks)
-export const maxDuration = 300;
+// Fast mode: FMP screener only (1 API call, <10 seconds)
+// Full mode with Finnhub: needs background task (too slow for API route)
+export const maxDuration = 60;
 
 /** GET: Return the current screened universe */
 export async function GET() {
