@@ -205,6 +205,35 @@ export function buildFeatures(
   // Volume
   features.volume_ratio = volumeRatio(volumes, 20);
 
+  // ─── Momentum Quality & Advanced Signals ──────────────────────────
+  // Momentum consistency: are returns steady or volatile?
+  // Consistent uptrend (low vol of returns + positive drift) = higher quality
+  if (closes.length >= 60) {
+    const rets20 = [];
+    for (let i = Math.max(0, closes.length - 20); i < closes.length; i++) {
+      if (closes[i - 1] > 0) rets20.push((closes[i] - closes[i - 1]) / closes[i - 1]);
+    }
+    if (rets20.length >= 10) {
+      const avgDailyRet = rets20.reduce((a, b) => a + b, 0) / rets20.length;
+      const retStd = Math.sqrt(rets20.reduce((a, b) => a + (b - avgDailyRet) ** 2, 0) / rets20.length);
+      // Momentum quality: positive consistent returns = high quality
+      features.momentum_quality = retStd > 0 ? (avgDailyRet / retStd) * Math.sqrt(252) : 0;
+    }
+  }
+
+  // Rate of change acceleration: is momentum accelerating or decelerating?
+  if (closes.length >= 40) {
+    const ret10d = returns(closes, 10);
+    const ret20d = returns(closes, 20);
+    features.momentum_accel = ret10d - ret20d * 0.5; // Positive = accelerating
+  }
+
+  // Volatility ratio: short-term vs long-term volatility
+  // Low ratio = volatility contraction (often precedes breakouts)
+  if (features.volatility_10d > 0 && features.volatility_63d > 0) {
+    features.vol_contraction = features.volatility_10d / features.volatility_63d;
+  }
+
   // Missingness flags — critical for ML: distinguish "no data" from "zero"
   features._has_60d_data = closes.length >= 60 ? 1 : 0;
   features._has_200d_data = closes.length >= 200 ? 1 : 0;

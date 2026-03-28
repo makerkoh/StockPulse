@@ -32,7 +32,7 @@ export const Z_SCORE_KEYS = [
   "analyst_consensus", "target_upside",
   "insider_mspr",
   "bollinger_position", "year_position", "drawdown_from_high",
-  "macd_histogram",
+  "macd_histogram", "momentum_quality", "momentum_accel", "vol_contraction",
 ];
 
 // ─── Horizon-Adaptive Weight Profiles ───────────────────────────────
@@ -368,15 +368,20 @@ export function generateForecast(
 
   marketRegimeSignal *= sqrtDays / Math.sqrt(21);
 
-  // ─── SIGNAL 12: Momentum Acceleration (2nd derivative) ──────
+  // ─── SIGNAL 12: Momentum Acceleration + Quality ─────────────
   // Is momentum speeding up or slowing down?
   const ret5d = f.return_5d || 0;
   const ret20d = f.return_20d || 0;
   const ret60d = f.return_60d || 0;
-  // Short-term acceleration: 5d momentum vs 20d momentum
-  const momAccel = ret5d - ret20d * (5 / 20); // Positive = accelerating
+  // Short-term acceleration: use pre-computed if available, else estimate
+  const momAccel = f.momentum_accel ?? (ret5d - ret20d * (5 / 20));
   const accelSignal = clamp(momAccel * 0.5, -0.015, 0.015) *
     sqrtDays / Math.sqrt(5) * w.momentum;
+
+  // Momentum quality: consistent uptrend = higher conviction
+  const momQuality = f.momentum_quality ?? 0;
+  const qualityBoost = clamp(momQuality * 0.003, -0.01, 0.01) *
+    sqrtDays / Math.sqrt(21) * w.momentum;
 
   // ─── SIGNAL 12: Multi-Timeframe Trend Alignment ────────────
   // When ALL moving averages agree (price > SMA20 > SMA50 > SMA200),
@@ -467,6 +472,7 @@ export function generateForecast(
     macroSignal +
     marketRegimeSignal +
     accelSignal +
+    qualityBoost +
     alignmentSignal +
     rsiExtremeSignal +
     confluenceSignal +
@@ -511,7 +517,7 @@ export function generateForecast(
   const signalDirections = [
     momentumSignal, meanReversionSignal, technicalsSignal, trendSignal,
     fundamentalsSignal, sentimentSignal, analystSignal, insiderSignal,
-    accelSignal, alignmentSignal, confluenceSignal,
+    accelSignal, qualityBoost, alignmentSignal, confluenceSignal,
   ].filter(s => Math.abs(s) > 0.001);
   const positiveSignals = signalDirections.filter(s => s > 0).length;
   const agreementRatio = signalDirections.length > 0

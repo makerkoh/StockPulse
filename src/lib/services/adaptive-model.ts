@@ -166,6 +166,8 @@ export const ADAPTIVE_FEATURE_KEYS = [
   // Z-scored cross-sectional
   "z_return_20d", "z_return_60d", "z_volume_ratio",
   "z_pe", "z_dcf_upside", "z_roe",
+  // Advanced momentum
+  "momentum_quality", "momentum_accel", "vol_contraction",
   // Market-level aggregate
   "mkt_avg_momentum", "mkt_breadth", "mkt_dispersion", "mkt_avg_rsi", "mkt_avg_vol",
 ];
