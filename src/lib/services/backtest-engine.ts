@@ -22,6 +22,7 @@ import { getProvider, isDemo } from "@/lib/providers/registry";
 import { DEFAULT_UNIVERSE } from "@/lib/providers/interfaces";
 import { buildFeatures } from "./features";
 import { rankStocks } from "./scoring";
+import { generateForecast, crossSectionalZScore, HORIZON_DAYS } from "./forecast";
 import {
   getCachedPrices,
   storePrices,
@@ -81,10 +82,6 @@ export interface BacktestOutput {
   startDate: string;
   endDate: string;
 }
-
-const HORIZON_DAYS: Record<Horizon, number> = {
-  "1D": 1, "1W": 5, "1M": 21, "3M": 63, "6M": 126,
-};
 
 /**
  * Run a real walk-forward backtest.
@@ -230,56 +227,16 @@ export async function runRealBacktest(config: BacktestConfig): Promise<BacktestO
       featureVectors.set(ticker, fv);
     }
 
-    // Generate forecasts
+    // Cross-sectional z-score normalization (same as pipeline)
+    crossSectionalZScore(featureVectors);
+
+    // Generate forecasts using shared forecast module (single source of truth)
     const forecasts: QuantileForecast[] = [];
     for (const ticker of activeTickers) {
       const fv = featureVectors.get(ticker);
       const price = priceAtRebalance.get(ticker);
       if (!fv || !price || price <= 0) continue;
-
-      const f = fv.features;
-
-      // Simplified forecast generation (same drift logic as pipeline)
-      const momentumDrift = (f.return_5d || 0) * 0.3 + (f.return_20d || 0) * 0.5;
-      const rsiVal = f.rsi_14 ?? 50;
-      const rsiSignal = (50 - rsiVal) / 200;
-      const trendBonus = f.golden_cross ? 0.002 * days : -0.001 * days;
-      const pe = f.pe || 25;
-      const valueTilt = pe < 15 ? 0.001 * days : pe > 40 ? -0.001 * days : 0;
-      const dcfBonus = f.dcf_upside != null ? Math.max(-0.02, Math.min(0.02, f.dcf_upside * 0.05)) * days : 0;
-      const mrzDrift = f.mean_reversion_z != null ? -f.mean_reversion_z * 0.003 * days : 0;
-
-      const annualizedDrift = momentumDrift + rsiSignal + trendBonus + valueTilt + dcfBonus + mrzDrift;
-      const periodReturn = annualizedDrift * (days / 252);
-      const annualVol = f.volatility_20d || 0.25;
-      const periodVol = (annualVol / Math.sqrt(252)) * Math.sqrt(days);
-
-      const pMid = price * (1 + periodReturn);
-      const pLow = price * (1 + periodReturn - 1.28 * periodVol);
-      const pHigh = price * (1 + periodReturn + 1.28 * periodVol);
-
-      const volConfidence = Math.max(0, 1 - periodVol * 3);
-      const featureCount = Object.keys(f).filter((k) => !k.startsWith("_")).length;
-      const dataConfidence = Math.min(featureCount / 30, 1);
-      const confidence = volConfidence * 0.45 + dataConfidence * 0.3 + 0.2;
-
-      const expectedReturn = (pMid - price) / price;
-      const downside = Math.max(price - pLow, 0.01);
-      const upside = Math.max(pHigh - price, 0.01);
-
-      forecasts.push({
-        ticker,
-        name: ticker, // We don't need names for backtest
-        sector: "Unknown",
-        horizon,
-        currentPrice: price,
-        pLow: +Math.max(pLow, 0.01).toFixed(2),
-        pMid: +pMid.toFixed(2),
-        pHigh: +pHigh.toFixed(2),
-        confidence: +Math.min(Math.max(confidence, 0.1), 0.99).toFixed(3),
-        expectedReturn: +expectedReturn.toFixed(4),
-        riskReward: +(upside / downside).toFixed(2),
-      });
+      forecasts.push(generateForecast(ticker, ticker, "Unknown", price, fv, horizon));
     }
 
     if (forecasts.length < 5) continue;

@@ -83,10 +83,11 @@ export function scoreStock(
   const insiderBonus = insiderRaw * w.insider;
 
   // Volatility component (day traders want HIGH vol, long-term wants LOW)
-  const vol = f.volatility_20d ? f.volatility_20d / forecast.currentPrice : 0.02;
+  // volatility_20d is annualized (e.g., 0.25 = 25%), NOT a price-level value
+  const vol = f.volatility_20d || 0.25;
   const volScore = w.volatility > 0
-    ? Math.min(vol * 100, 10) * w.volatility     // Reward high vol
-    : Math.max(10 - vol * 100, 0) * Math.abs(w.volatility); // Reward low vol
+    ? Math.min(vol * 30, 10) * w.volatility     // Reward high vol (vol ~0.25 → 7.5)
+    : Math.max(10 - vol * 30, 0) * Math.abs(w.volatility); // Reward low vol
 
   // Liquidity component (volume ratio — high volume = more liquid)
   const volRatio = f.volume_ratio || 1;
@@ -107,7 +108,7 @@ export function scoreStock(
       breakdown.liquidity = liquidityScore;
       breakdown.analyst = analystBonus;
       breakdown.earnings = earningsRaw;
-      score = ret * 60 + conf * 25 + Math.min(forecast.riskReward, 3) * 5 +
+      score = ret * 200 + conf * 15 + Math.min(forecast.riskReward, 3) * 5 +
         sentimentBonus + insiderBonus + analystBonus + earningsRaw + volScore + liquidityScore;
       break;
     }

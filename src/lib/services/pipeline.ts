@@ -16,6 +16,7 @@ import { getProvider, isDemo } from "@/lib/providers/registry";
 import { DEFAULT_UNIVERSE } from "@/lib/providers/interfaces";
 import { buildFeatures } from "./features";
 import { rankStocks } from "./scoring";
+import { generateForecast, crossSectionalZScore } from "./forecast";
 import {
   getCachedPrices,
   storePrices,
@@ -24,10 +25,6 @@ import {
   getCachedNews,
   storeNews,
 } from "./data-cache";
-
-const HORIZON_DAYS: Record<Horizon, number> = {
-  "1D": 1, "1W": 5, "1M": 21, "3M": 63, "6M": 126,
-};
 
 // ─── Keyword-based sentiment scoring ────────────────────────────────
 const BULLISH_KEYWORDS = [
@@ -119,85 +116,6 @@ function buildQuickFeatures(
   }
 
   return { ticker, date: new Date().toISOString().split("T")[0], features };
-}
-
-// ─── Generate Quantile Forecast ──────────────────────────────────────
-function generateForecast(
-  ticker: string,
-  name: string,
-  sector: string,
-  currentPrice: number,
-  features: FeatureVector,
-  horizon: Horizon
-): QuantileForecast {
-  const f = features.features;
-  const days = HORIZON_DAYS[horizon];
-
-  const momentumDrift = (f.return_5d || 0) * 0.3 + (f.return_20d || 0) * 0.5;
-  const rsiVal = f.av_rsi_14 ?? f.rsi_14 ?? 50;
-  const rsiSignal = (50 - rsiVal) / 200;
-  const trendBonus = f.golden_cross ? 0.002 * days : -0.001 * days;
-  const pe = f.pe || 25;
-  const valueTilt = pe < 15 ? 0.001 * days : pe > 40 ? -0.001 * days : 0;
-  const dcfBonus = f.dcf_upside != null ? Math.max(-0.02, Math.min(0.02, f.dcf_upside * 0.05)) * days : 0;
-  const sentimentDrift = (f.avg_sentiment ?? 0) * 0.01 * days;
-  const adxMultiplier = f.adx != null && f.adx > 25 ? 1.2 : 1.0;
-
-  let analystDrift = 0;
-  if (f.analyst_consensus != null) analystDrift = f.analyst_consensus * 0.01 * days;
-  if (f.target_upside != null) analystDrift += Math.max(-0.02, Math.min(0.02, f.target_upside * 0.03)) * days;
-
-  let earningsVolBoost = 1.0;
-  if (f.earnings_imminent === 1) earningsVolBoost = 1.5;
-  const earningsDrift = (f.last_earnings_surprise ?? 0) * 0.001 * days;
-
-  let insiderDrift = 0;
-  if (f.insider_mspr != null) insiderDrift = (f.insider_mspr / 100) * 0.015 * days;
-  if (f.insider_cluster === 1) insiderDrift += 0.01 * days;
-
-  const mrzDrift = f.mean_reversion_z != null ? -f.mean_reversion_z * 0.003 * days : 0;
-
-  let macroAdjust = 0;
-  if (f.fed_rate != null && f.cpi_yoy != null) {
-    if (f.fed_rate > 4 && f.cpi_yoy > 3) macroAdjust = -0.001 * days;
-    else if (f.fed_rate < 2) macroAdjust = 0.001 * days;
-  }
-
-  const annualizedDrift = (
-    momentumDrift + rsiSignal + trendBonus + valueTilt + dcfBonus +
-    sentimentDrift + insiderDrift + analystDrift + earningsDrift +
-    mrzDrift + macroAdjust
-  ) * adxMultiplier;
-
-  const periodReturn = annualizedDrift * (days / 252);
-  const annualVol = f.volatility_20d || 0.25;
-  const periodVol = (annualVol / Math.sqrt(252)) * Math.sqrt(days) * earningsVolBoost;
-
-  const pMid = currentPrice * (1 + periodReturn);
-  const pLow = currentPrice * (1 + periodReturn - 1.28 * periodVol);
-  const pHigh = currentPrice * (1 + periodReturn + 1.28 * periodVol);
-
-  const volConfidence = Math.max(0, 1 - periodVol * 3);
-  const featureCount = Object.keys(f).filter((k) => !k.startsWith("_")).length;
-  const dataConfidence = Math.min(featureCount / 30, 1);
-  const sentimentConfidence = f.sentiment_strength != null ? f.sentiment_strength * 0.1 : 0;
-  const hasFullData = f._has_60d_data === 1 ? 0.1 : 0;
-  const confidence = volConfidence * 0.45 + dataConfidence * 0.3 + sentimentConfidence * 0.1 + hasFullData + 0.05;
-
-  const expectedReturn = (pMid - currentPrice) / currentPrice;
-  const downside = Math.max(currentPrice - pLow, 0.01);
-  const upside = Math.max(pHigh - currentPrice, 0.01);
-
-  return {
-    ticker, name, sector, horizon,
-    currentPrice: +currentPrice.toFixed(2),
-    pLow: +Math.max(pLow, 0.01).toFixed(2),
-    pMid: +pMid.toFixed(2),
-    pHigh: +pHigh.toFixed(2),
-    confidence: +Math.min(Math.max(confidence, 0.1), 0.99).toFixed(3),
-    expectedReturn: +expectedReturn.toFixed(4),
-    riskReward: +(upside / downside).toFixed(2),
-  };
 }
 
 // ─── Cache-aware data fetchers ───────────────────────────────────────
@@ -322,6 +240,9 @@ export async function runPrediction(
     );
   }
 
+  // Cross-sectional z-score normalization (Pass 1)
+  crossSectionalZScore(featureVectors);
+
   // Generate initial forecasts and rank
   const forecasts: QuantileForecast[] = quotes
     .filter((q) => q.price > 0)
@@ -391,6 +312,9 @@ export async function runPrediction(
       );
     }
   }
+
+  // Cross-sectional z-score normalization (Pass 2 — with enriched features)
+  crossSectionalZScore(featureVectors);
 
   // Re-generate forecasts and GLOBALLY re-rank
   const enrichedForecasts: QuantileForecast[] = [];
