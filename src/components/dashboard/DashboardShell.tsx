@@ -28,6 +28,8 @@ export default function DashboardShell() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [apiWarning, setApiWarning] = useState<string | null>(null);
+  const [screening, setScreening] = useState(false);
+  const [screenStatus, setScreenStatus] = useState<string | null>(null);
 
   const runPrediction = useCallback(async () => {
     setLoading(true);
@@ -113,6 +115,50 @@ export default function DashboardShell() {
             </button>
           </div>
 
+          {/* Screen Stocks button */}
+          <div className="flex flex-col">
+            <span className="text-2xs text-text-tertiary uppercase tracking-wider mb-1.5 pl-0.5">
+              Universe
+            </span>
+            <button
+              onClick={async () => {
+                setScreening(true);
+                setScreenStatus("Scanning 500+ stocks via Finnhub…");
+                try {
+                  const res = await fetch("/api/screen", { method: "POST" });
+                  const json = await res.json();
+                  if (json.error) {
+                    setScreenStatus(`Error: ${json.error}`);
+                  } else {
+                    setScreenStatus(`✓ ${json.data.count} stocks selected`);
+                    setTimeout(() => setScreenStatus(null), 5000);
+                  }
+                } catch {
+                  setScreenStatus("Screening failed");
+                } finally {
+                  setScreening(false);
+                }
+              }}
+              disabled={screening}
+              className="px-3 py-2 rounded-lg text-xs font-semibold transition-all duration-200 border bg-accent/15 border-accent/40 text-accent hover:bg-accent/25"
+              title="Scan 500+ stocks via Finnhub to find the best candidates for analysis. Takes ~8 minutes."
+            >
+              {screening ? (
+                <span className="flex items-center gap-1.5">
+                  <Spinner size={12} />
+                  Scanning…
+                </span>
+              ) : (
+                <span className="flex items-center gap-1.5">
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                  </svg>
+                  Screen Stocks
+                </span>
+              )}
+            </button>
+          </div>
+
           <Select
             label="Strategy"
             value={strategy}
@@ -143,6 +189,13 @@ export default function DashboardShell() {
           </Button>
         </div>
       </div>
+
+      {/* Screen Status */}
+      {screenStatus && (
+        <div className="flex items-center gap-2 px-4 py-3 bg-accent/10 border border-accent/20 rounded-lg">
+          <span className="text-sm text-accent">{screenStatus}</span>
+        </div>
+      )}
 
       {/* API Limit Warning */}
       {apiWarning && (

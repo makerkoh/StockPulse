@@ -183,6 +183,24 @@ model News {
   @@index([publishedAt])
 }
 
+model ScreenedStock {
+  id          String   @id @default(cuid())
+  ticker      String
+  name        String?
+  sector      String?
+  marketCap   Float?
+  price       Float?
+  changePct   Float?
+  volume      Float?
+  quickScore  Float    @default(0)   // Composite screening score
+  signals     Json?                   // Raw signal data from screening
+  screenedAt  DateTime @default(now())
+
+  @@unique([ticker, screenedAt])
+  @@index([quickScore])
+  @@index([screenedAt])
+}
+
 model InsiderTrade {
   id          String   @id @default(cuid())
   stockId     String

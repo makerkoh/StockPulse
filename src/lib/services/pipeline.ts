@@ -17,6 +17,7 @@ import { DEFAULT_UNIVERSE } from "@/lib/providers/interfaces";
 import { buildFeatures } from "./features";
 import { rankStocks } from "./scoring";
 import { generateForecast, crossSectionalZScore, injectMarketSignals } from "./forecast";
+import { getScreenedUniverse } from "./screener";
 import {
   getCachedPrices,
   storePrices,
@@ -214,7 +215,15 @@ export async function runPrediction(
   strategy: Strategy = "swing"
 ): Promise<PredictionResponse> {
   const provider = getProvider();
-  const tickers = universe && universe.length > 0 ? universe : DEFAULT_UNIVERSE;
+
+  // Use dynamic screened universe if available, otherwise fall back to static list
+  let tickers: string[];
+  if (universe && universe.length > 0) {
+    tickers = universe;
+  } else {
+    const screened = await getScreenedUniverse(50);
+    tickers = screened && screened.length > 10 ? screened : DEFAULT_UNIVERSE;
+  }
 
   // ── PASS 1: Batch quotes + fundamentals ────────────────────────
   // Quotes are always live (1 API call via FMP batch endpoint)
