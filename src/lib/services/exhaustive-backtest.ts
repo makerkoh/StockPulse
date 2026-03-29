@@ -246,26 +246,27 @@ export async function runExhaustiveChunk(config: ExhaustiveConfig): Promise<Chun
   // Use raw SQL for much faster bulk loading (vs Prisma ORM per-ticker)
   const rawBars = await prisma.$queryRaw<{
     ticker: string;
-    date: string;
+    date_str: string;
     open: number;
     high: number;
     low: number;
     close: number;
     volume: number;
   }[]>`
-    SELECT s.ticker, pb.date, pb.open, pb.high, pb.low, pb.close, pb.volume
-    FROM "PriceBar" pb
-    JOIN "Stock" s ON pb."stockId" = s.id
+    SELECT s.ticker, TO_CHAR(p.date, 'YYYY-MM-DD') AS date_str,
+           p.open, p.high, p.low, p.close, p.volume
+    FROM "Price" p
+    JOIN "Stock" s ON p."stockId" = s.id
     WHERE s.ticker = ANY(${universe})
-      AND pb.date >= ${fromStr}
-    ORDER BY s.ticker, pb.date
+      AND p.date >= ${fromStr}::date
+    ORDER BY s.ticker, p.date
   `;
 
   // Group into per-ticker arrays
   for (const bar of rawBars) {
     if (!priceMap.has(bar.ticker)) priceMap.set(bar.ticker, []);
     priceMap.get(bar.ticker)!.push({
-      date: bar.date,
+      date: bar.date_str,
       open: Number(bar.open),
       high: Number(bar.high),
       low: Number(bar.low),
