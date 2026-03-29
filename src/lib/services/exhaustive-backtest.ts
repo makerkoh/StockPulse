@@ -638,6 +638,44 @@ export async function getExhaustiveMetrics(runId: string): Promise<AggregatedMet
     ORDER BY (AVG("actualReturn") FILTER (WHERE rank <= 10) - AVG("actualReturn")) DESC
   `;
 
+  // Compute Spearman Rank IC per strategy/horizon (average of per-day rank correlations)
+  const rankIcRows = await prisma.$queryRaw<{
+    strategy: string;
+    horizon: string;
+    avg_rank_ic: number;
+  }[]>`
+    WITH daily_ranked AS (
+      SELECT
+        strategy, horizon, "predictionDate", "predictedReturn", "actualReturn",
+        RANK() OVER (PARTITION BY strategy, horizon, "predictionDate" ORDER BY "predictedReturn" DESC) AS pred_rank,
+        RANK() OVER (PARTITION BY strategy, horizon, "predictionDate" ORDER BY "actualReturn" DESC) AS actual_rank,
+        COUNT(*) OVER (PARTITION BY strategy, horizon, "predictionDate") AS n
+      FROM "ExhaustiveBacktestResult"
+      WHERE "runId" = ${runId} AND "actualReturn" IS NOT NULL
+    ),
+    daily_corr AS (
+      SELECT
+        strategy, horizon, "predictionDate", n,
+        CASE WHEN n < 3 THEN NULL
+        ELSE 1.0 - (6.0 * SUM((pred_rank - actual_rank) * (pred_rank - actual_rank))) / (n * (n * n - 1.0))
+        END AS spearman
+      FROM daily_ranked
+      GROUP BY strategy, horizon, "predictionDate", n
+    )
+    SELECT
+      strategy, horizon,
+      AVG(spearman)::float8 AS avg_rank_ic
+    FROM daily_corr
+    WHERE spearman IS NOT NULL
+    GROUP BY strategy, horizon
+  `;
+
+  // Build lookup map for rank IC
+  const rankIcMap = new Map<string, number>();
+  for (const r of rankIcRows) {
+    rankIcMap.set(`${r.strategy}|${r.horizon}`, r.avg_rank_ic ?? 0);
+  }
+
   return rows.map((r) => ({
     strategy: r.strategy,
     horizon: r.horizon,
@@ -647,7 +685,7 @@ export async function getExhaustiveMetrics(runId: string): Promise<AggregatedMet
     avgPredictedReturn: r.avg_predicted ?? 0,
     avgActualReturn: r.avg_actual ?? 0,
     avgAbsError: r.avg_abs_error ?? 0,
-    rankCorrelation: 0, // Spearman requires per-day computation — skip for now
+    rankCorrelation: rankIcMap.get(`${r.strategy}|${r.horizon}`) ?? 0,
     top10AvgReturn: r.top10_avg ?? 0,
     universeAvgReturn: r.universe_avg ?? 0,
     excessReturn: (r.top10_avg ?? 0) - (r.universe_avg ?? 0),
