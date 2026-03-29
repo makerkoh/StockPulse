@@ -216,7 +216,7 @@ export default function ExhaustiveBacktestPage() {
           body: JSON.stringify({
             runId: currentRunId,
             daysPerChunk: 3,
-            lookbackYears: 5,
+            lookbackYears: 8,
           }),
         });
 
