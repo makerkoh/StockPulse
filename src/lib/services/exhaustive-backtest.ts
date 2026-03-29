@@ -235,39 +235,48 @@ export async function runExhaustiveChunk(config: ExhaustiveConfig): Promise<Chun
     run = { id: created.id, lastProcessedDate: null, processedDays: 0, totalDays: 0 };
   }
 
-  // ── Step 2: Load all historical prices ──────────────────────────
+  // ── Step 2: Load all historical prices (fast raw SQL) ───────────
   const to = new Date();
   const from = new Date(Date.now() - (lookbackYears + 2) * 365 * 86_400_000); // Extra 2yr for feature lookback
+  const fromStr = from.toISOString().slice(0, 10);
 
   const priceMap = new Map<string, PriceBar[]>();
-  const provider = getProvider();
   const batchSize = 10;
 
-  for (let i = 0; i < universe.length; i += batchSize) {
-    const batch = universe.slice(i, i + batchSize);
-    const results = await Promise.all(
-      batch.map(async (t) => {
-        try {
-          const { cached, fetchFrom } = await getCachedPrices(t, from, to);
-          if (!fetchFrom) return [t, cached] as const;
+  // Use raw SQL for much faster bulk loading (vs Prisma ORM per-ticker)
+  const rawBars = await prisma.$queryRaw<{
+    ticker: string;
+    date: string;
+    open: number;
+    high: number;
+    low: number;
+    close: number;
+    volume: number;
+  }[]>`
+    SELECT s.ticker, pb.date, pb.open, pb.high, pb.low, pb.close, pb.volume
+    FROM "PriceBar" pb
+    JOIN "Stock" s ON pb."stockId" = s.id
+    WHERE s.ticker = ANY(${universe})
+      AND pb.date >= ${fromStr}
+    ORDER BY s.ticker, pb.date
+  `;
 
-          const fresh = await provider.getHistoricalPrices(t, fetchFrom, to);
-          storePrices(t, fresh).catch(() => {});
+  // Group into per-ticker arrays
+  for (const bar of rawBars) {
+    if (!priceMap.has(bar.ticker)) priceMap.set(bar.ticker, []);
+    priceMap.get(bar.ticker)!.push({
+      date: bar.date,
+      open: Number(bar.open),
+      high: Number(bar.high),
+      low: Number(bar.low),
+      close: Number(bar.close),
+      volume: Number(bar.volume),
+    });
+  }
 
-          const dateSet = new Set(cached.map((b) => b.date));
-          const merged = [...cached];
-          for (const bar of fresh) {
-            if (!dateSet.has(bar.date)) { merged.push(bar); dateSet.add(bar.date); }
-          }
-          return [t, merged.sort((a, b) => a.date.localeCompare(b.date))] as const;
-        } catch {
-          return [t, [] as PriceBar[]] as const;
-        }
-      })
-    );
-    for (const [t, bars] of results) {
-      if (bars.length > 60) priceMap.set(t, bars);
-    }
+  // Remove tickers with insufficient data
+  for (const [ticker, bars] of priceMap) {
+    if (bars.length <= 60) priceMap.delete(ticker);
   }
 
   // Preload stock IDs for enrichment lookups (ticker → stockId)
@@ -290,7 +299,7 @@ export async function runExhaustiveChunk(config: ExhaustiveConfig): Promise<Chun
     }
   }
 
-  // Preload current fundamentals as fallback (for dates with no historical snapshot)
+  // Load cached fundamentals (no API calls — only DB lookups)
   const currentFundamentals = new Map<string, FundamentalData | null>();
   for (let i = 0; i < universe.length; i += batchSize) {
     const batch = universe.slice(i, i + batchSize);
@@ -298,10 +307,7 @@ export async function runExhaustiveChunk(config: ExhaustiveConfig): Promise<Chun
       batch.map(async (t) => {
         try {
           const cached = await getCachedFundamentals(t);
-          if (cached) return [t, cached] as const;
-          const fresh = await provider.getFundamentals(t);
-          if (fresh) storeFundamentals(t, fresh).catch(() => {});
-          return [t, fresh] as const;
+          return [t, cached] as const;
         } catch {
           return [t, null] as const;
         }
